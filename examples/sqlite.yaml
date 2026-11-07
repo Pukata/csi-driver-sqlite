@@ -3,7 +3,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: sqlite-demo
 spec:
-  storageClassName: sqlite-roam
+  storageClassName: sqlite-csi
   accessModes: [ReadWriteOncePod]
   resources:
     requests:
@@ -24,7 +24,7 @@ spec:
       labels: {app: sqlite-demo}
     spec:
       automountServiceAccountToken: false
-      nodeSelector: {sqlite-roam.csi/enabled: 'true'}
+      nodeSelector: {sqlite.csi/enabled: 'true'}
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000

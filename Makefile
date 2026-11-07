@@ -1,6 +1,6 @@
 .PHONY: fmt verify test build chart image e2e
 
-IMAGE ?= sqlite-roam:e2e
+IMAGE ?= sqlite-csi:e2e
 
 fmt:
 	gofmt -w *.go
@@ -15,11 +15,11 @@ test:
 	go tool cover -func=coverage.out
 
 build:
-	CGO_ENABLED=0 go build -trimpath -o bin/sqlite-roam .
+	CGO_ENABLED=0 go build -trimpath -o bin/sqlite-csi .
 
 chart:
-	helm lint --strict charts/sqlite-roam
-	helm lint --strict charts/sqlite-roam --set failover.enabled=true --set failover.configSecret=test-fencing
+	helm lint --strict charts/sqlite-csi
+	helm lint --strict charts/sqlite-csi --set failover.enabled=true --set failover.configSecret=test-fencing
 
 image:
 	docker build -t $(IMAGE) .

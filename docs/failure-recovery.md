@@ -6,10 +6,10 @@ ownership. Sudden failure cannot prove that every committed write was replicated
 
 ## Defaults and data loss
 
-The default `sqlite-roam` class requires manual recovery after an unclean node
+The default `sqlite-csi` class requires manual recovery after an unclean node
 failure. No lease timeout or failed health probe releases a prepared writer.
 
-The optional `sqlite-roam-ha` class uses `recoveryPolicy: latest-replica`.
+The optional `sqlite-csi-ha` class uses `recoveryPolicy: latest-replica`.
 It requires an independently secured fencing authority and accepts loss of
 unpublished writes. A successful SQLite commit is not a remote durability
 acknowledgement. A replica outage can extend the loss window indefinitely.
@@ -107,7 +107,7 @@ restrict access to the Secret. `manualPowerOnOnly` is an operator guarantee;
 setting it does not disable an external auto-restart manager.
 
 Enable `failover.enabled`, set `failover.configSecret`, and select the separate
-`sqlite-roam-ha` class only for workloads accepting this policy. Existing manual
+`sqlite-csi-ha` class only for workloads accepting this policy. Existing manual
 volumes do not automatically opt in when fencing is enabled. Replacing a node
 object or machine requires deliberately updating its identity mapping.
 

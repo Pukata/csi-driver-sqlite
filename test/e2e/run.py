@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 class Suite:
     def __init__(self, image):
-        self.name = 'sqlite-roam-e2e-'+secrets.token_hex(4)
+        self.name = 'sqlite-csi-e2e-'+secrets.token_hex(4)
         self.root = REPO/'.e2e'/self.name
         self.root.mkdir(parents=True, mode=0o700)
         self.artifacts = REPO/'.e2e/artifacts'/self.name
@@ -76,10 +76,10 @@ class Suite:
         return next((p for p in self.pods('sqlite-test', 'app=sqlite-test') if self.ready(p)), None)
 
     def controller(self):
-        return next((p for p in self.pods('sqlite-roam-system', 'app=sqlite-roam-controller') if self.ready(p)), None)
+        return next((p for p in self.pods('sqlite-csi-system', 'app=sqlite-csi-controller') if self.ready(p)), None)
 
     def volume(self):
-        return json.loads(self.get('configmap', self.volume_id, '-n', 'sqlite-roam-system')['data']['volume.json'])
+        return json.loads(self.get('configmap', self.volume_id, '-n', 'sqlite-csi-system')['data']['volume.json'])
 
     def inspect(self, node):
         assert node in self.mappings, 'Refusing a Docker operation on a node outside this run'
@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory() as d:
 '''
         pod = self.controller()
         assert pod
-        return json.loads(self.k('exec', '-n', 'sqlite-roam-system', pod['metadata']['name'], '-c', 'driver', '--', 'python3', '-c', script))
+        return json.loads(self.k('exec', '-n', 'sqlite-csi-system', pod['metadata']['name'], '-c', 'driver', '--', 'python3', '-c', script))
 
     def setup(self):
         existing = self.run('kind', 'get', 'clusters').splitlines()
@@ -133,10 +133,9 @@ with tempfile.TemporaryDirectory() as d:
                 occupied.append(ipaddress.ip_network(route['dst'], strict=False))
         subnet = next(ipaddress.ip_network(f'10.250.{n}.0/24') for n in range(1,255)
                       if not any(ipaddress.ip_network(f'10.250.{n}.0/24').overlaps(p) for p in occupied if p.version==4))
-        self.network_id = self.run('docker', 'network', 'create', '--subnet', str(subnet),
-                                   '--label', 'sqlite-roam.e2e='+self.name, self.name)
-        network = json.loads(self.run('docker', 'network', 'inspect', self.network_id))[0]
-        self.gateway = network['IPAM']['Config'][0]['Gateway']
+        self.gateway = str(subnet.network_address+1)
+        self.network_id = self.run('docker', 'network', 'create', '--subnet', str(subnet), '--gateway', self.gateway,
+                                   '--label', 'sqlite-csi.e2e='+self.name, self.name)
         config = {'kind':'Cluster', 'apiVersion':'kind.x-k8s.io/v1alpha4', 'networking':{'ipFamily':'ipv4'},
                   'nodes':[{'role':role,'extraMounts':[{'hostPath':str(self.replicas),'containerPath':'/shared-replicas'}]}
                            for role in ('control-plane','worker','worker')]}
@@ -162,12 +161,12 @@ with tempfile.TemporaryDirectory() as d:
             self.mappings[name] = {'containerID':machine['Id'], 'machineID':'docker:'+machine['Id'],
                                    'nodeUID':node['metadata']['uid']}
         self.workers = sorted(self.mappings)
-        self.k('label', 'node', *self.workers, 'sqlite-roam.csi/enabled=true')
+        self.k('label', 'node', *self.workers, 'sqlite.csi/enabled=true')
         self.k('cordon', self.workers[1])
         self.run('kind', 'load', 'docker-image', self.image, '--name', self.name, timeout=360)
         certificate, key = self.root/'tls.crt', self.root/'tls.key'
         self.run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
-                 '-keyout', str(key), '-out', str(certificate), '-subj', '/CN=sqlite-roam-e2e',
+                 '-keyout', str(key), '-out', str(certificate), '-subj', '/CN=sqlite-csi-e2e',
                  '-addext', 'subjectAltName=IP:'+self.gateway)
         token = secrets.token_hex(32)
         token_path = self.root/'token'
@@ -177,34 +176,34 @@ with tempfile.TemporaryDirectory() as d:
         config = {'endpoint':f'https://{self.gateway}:{self.fencer.port}', 'caFile':'/fencing/ca.pem',
                   'tokenFile':'/fencing/token', 'manualPowerOnOnly':True,'graceSeconds':5,
                   'nodes':{name:{'nodeUID':m['nodeUID'],'machineID':m['machineID']} for name,m in self.mappings.items()}}
-        for namespace in ('sqlite-roam-system','sqlite-test'):
+        for namespace in ('sqlite-csi-system','sqlite-test'):
             self.apply({'apiVersion':'v1','kind':'Namespace','metadata':{'name':namespace,
                         'labels':{'pod-security.kubernetes.io/enforce':'privileged'}}})
         self.apply({'apiVersion':'v1','kind':'PersistentVolume','metadata':{'name':'sqlite-test-backing'},
                     'spec':{'capacity':{'storage':'5Gi'},'accessModes':['ReadWriteMany'],'storageClassName':'',
                             'persistentVolumeReclaimPolicy':'Retain','hostPath':{'path':'/shared-replicas','type':'Directory'},
-                            'claimRef':{'namespace':'sqlite-roam-system','name':'sqlite-roam-replicas'}}})
+                            'claimRef':{'namespace':'sqlite-csi-system','name':'sqlite-csi-replicas'}}})
         self.apply({'apiVersion':'v1','kind':'PersistentVolumeClaim',
-                    'metadata':{'name':'sqlite-roam-replicas','namespace':'sqlite-roam-system'},
+                    'metadata':{'name':'sqlite-csi-replicas','namespace':'sqlite-csi-system'},
                     'spec':{'volumeName':'sqlite-test-backing','storageClassName':'','accessModes':['ReadWriteMany'],
                             'resources':{'requests':{'storage':'5Gi'}}}})
-        self.k('create','secret','generic','test-fencing','-n','sqlite-roam-system',
+        self.k('create','secret','generic','test-fencing','-n','sqlite-csi-system',
                '--from-file=ca.pem='+str(certificate),'--from-file=token='+str(token_path),
                '--from-literal=config.json='+json.dumps(config))
-        self.run('helm','upgrade','--install','sqlite-roam',str(REPO/'charts/sqlite-roam'),
+        self.run('helm','upgrade','--install','sqlite-csi',str(REPO/'charts/sqlite-csi'),
                  '--kubeconfig',str(self.kubeconfig),'--kube-context','kind-'+self.name,
-                 '-n','sqlite-roam-system','--set','image='+self.image,'--set','failover.enabled=true',
+                 '-n','sqlite-csi-system','--set','image='+self.image,'--set','failover.enabled=true',
                  '--set','failover.configSecret=test-fencing','--wait','--timeout','300s')
         self.apply({'apiVersion':'v1','kind':'ConfigMap','metadata':{'name':'sqlite-app','namespace':'sqlite-test'},
                     'data':{'app.py':(REPO/'test/e2e/app.py').read_text()}})
         self.apply({'apiVersion':'v1','kind':'PersistentVolumeClaim','metadata':{'name':'sqlite-test','namespace':'sqlite-test'},
-                    'spec':{'storageClassName':'sqlite-roam-ha','accessModes':['ReadWriteOncePod'],
+                    'spec':{'storageClassName':'sqlite-csi-ha','accessModes':['ReadWriteOncePod'],
                             'resources':{'requests':{'storage':'1Gi'}}}})
         self.apply({'apiVersion':'apps/v1','kind':'Deployment','metadata':{'name':'sqlite-test','namespace':'sqlite-test'},
                     'spec':{'replicas':1,'strategy':{'type':'Recreate'},'selector':{'matchLabels':{'app':'sqlite-test'}},
                             'template':{'metadata':{'labels':{'app':'sqlite-test'}},'spec':{
                                 'automountServiceAccountToken':False,'securityContext':{'runAsUser':1000,'runAsGroup':1000},
-                                'nodeSelector':{'sqlite-roam.csi/enabled':'true'},
+                                'nodeSelector':{'sqlite.csi/enabled':'true'},
                                 'containers':[{'name':'app','image':self.image,'command':['python3','/app/app.py'],
                                     'env':[{'name':'DB_PATH','value':'/data/database.db'},{'name':'ROLE','value':'active'},
                                            {'name':'NODE','valueFrom':{'fieldRef':{'fieldPath':'spec.nodeName'}}}],
@@ -290,7 +289,7 @@ with tempfile.TemporaryDirectory() as d:
                 '--runtime-endpoint=unix:///run/containerd/containerd.sock','ps','-o','json'))
             return not any(c['labels'].get('io.kubernetes.pod.uid')==old_uid for c in data['containers'])
         self.wait('old application container is gone',no_old_container)
-        agent = self.wait('returning node agent Ready',lambda:next((p for p in self.pods('sqlite-roam-system','app=sqlite-roam-node')
+        agent = self.wait('returning node agent Ready',lambda:next((p for p in self.pods('sqlite-csi-system','app=sqlite-csi-node')
                                if p['spec']['nodeName']==node and self.ready(p)),None))
         script = '''import pathlib
 matches=[]
@@ -302,7 +301,7 @@ for p in pathlib.Path('/proc').glob('[0-9]*/cmdline'):
 assert not matches, 'stale publisher still running'
 print('ok')
 '''
-        self.wait('returning worker has no stale publisher',lambda:self.k('exec','-n','sqlite-roam-system',agent['metadata']['name'],
+        self.wait('returning worker has no stale publisher',lambda:self.k('exec','-n','sqlite-csi-system',agent['metadata']['name'],
                   '-c','driver','--','python3','-c',script)=='ok')
 
     def collect(self, error):
@@ -314,7 +313,7 @@ print('ok')
                           ('events',('get','events','-A','--sort-by=.lastTimestamp'))]:
             try:(self.artifacts/(name+'.txt')).write_text(self.k(*args))
             except Exception:pass
-        for namespace in ('sqlite-roam-system','sqlite-test'):
+        for namespace in ('sqlite-csi-system','sqlite-test'):
             try:pods=self.get('pods','-n',namespace)['items']
             except Exception:continue
             for pod in pods:
@@ -327,13 +326,13 @@ print('ok')
     def close(self):
         if self.fencer:self.fencer.close()
         if self.created:
-            assert self.name.startswith('sqlite-roam-e2e-')
+            assert self.name.startswith('sqlite-csi-e2e-')
             self.run('kind','delete','cluster','--name',self.name,'--kubeconfig',str(self.kubeconfig))
         if self.network_id:
             networks=[json.loads(line) for line in self.run('docker','network','ls','--format','json').splitlines()]
             if any(n['ID']==self.network_id or self.network_id.startswith(n['ID']) for n in networks):
                 network=json.loads(self.run('docker','network','inspect',self.network_id))[0]
-                assert network['Labels'].get('sqlite-roam.e2e')==self.name
+                assert network['Labels'].get('sqlite-csi.e2e')==self.name
                 self.run('docker','network','rm',self.network_id)
         for name in ('token','tls.key','kubeconfig'):
             (self.root/name).unlink(missing_ok=True)
@@ -341,7 +340,7 @@ print('ok')
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('--image',default='sqlite-roam:e2e')
+    parser.add_argument('--image',default='sqlite-csi:e2e')
     suite=Suite(parser.parse_args().image)
     error=None
     try:

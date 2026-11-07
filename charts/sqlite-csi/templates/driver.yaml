@@ -13,7 +13,7 @@ spec:
 apiVersion: storage.k8s.io/v1
 kind: CSIDriver
 metadata:
-  name: sqlite-roam.csi
+  name: sqlite.csi
 spec:
   attachRequired: true
   podInfoOnMount: true
@@ -26,7 +26,7 @@ kind: StorageClass
 metadata:
   name: {{ .Values.storageClass }}
   annotations: {storageclass.kubernetes.io/is-default-class: 'false'}
-provisioner: sqlite-roam.csi
+provisioner: sqlite.csi
 parameters:
   database: database.db
 reclaimPolicy: Retain
@@ -38,7 +38,7 @@ apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: {{ .Values.failover.storageClass }}
-provisioner: sqlite-roam.csi
+provisioner: sqlite.csi
 parameters:
   database: database.db
   recoveryPolicy: latest-replica
@@ -49,15 +49,15 @@ allowVolumeExpansion: false
 {{- end }}
 apiVersion: v1
 kind: ServiceAccount
-metadata: {name: sqlite-roam-controller}
+metadata: {name: sqlite-csi-controller}
 ---
 apiVersion: v1
 kind: ServiceAccount
-metadata: {name: sqlite-roam-node}
+metadata: {name: sqlite-csi-node}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
-metadata: {name: sqlite-roam-controller}
+metadata: {name: sqlite-csi-controller}
 rules:
   - apiGroups: ['']
     resources: [persistentvolumes]
@@ -85,13 +85,13 @@ rules:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
-metadata: {name: sqlite-roam-controller}
-subjects: [{kind: ServiceAccount, name: sqlite-roam-controller, namespace: {{ .Release.Namespace }}}]
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: sqlite-roam-controller}
+metadata: {name: sqlite-csi-controller}
+subjects: [{kind: ServiceAccount, name: sqlite-csi-controller, namespace: {{ .Release.Namespace }}}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: sqlite-csi-controller}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: sqlite-roam-state}
+metadata: {name: sqlite-csi-state}
 rules:
   - apiGroups: ['']
     resources: [configmaps]
@@ -102,23 +102,23 @@ rules:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: sqlite-roam-state}
+metadata: {name: sqlite-csi-state}
 subjects:
-  - {kind: ServiceAccount, name: sqlite-roam-controller}
-  - {kind: ServiceAccount, name: sqlite-roam-node}
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: sqlite-roam-state}
+  - {kind: ServiceAccount, name: sqlite-csi-controller}
+  - {kind: ServiceAccount, name: sqlite-csi-node}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: sqlite-csi-state}
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: sqlite-roam-controller}
+metadata: {name: sqlite-csi-controller}
 spec:
   replicas: 1
   strategy: {type: Recreate}
-  selector: {matchLabels: {app: sqlite-roam-controller}}
+  selector: {matchLabels: {app: sqlite-csi-controller}}
   template:
-    metadata: {labels: {app: sqlite-roam-controller}}
+    metadata: {labels: {app: sqlite-csi-controller}}
     spec:
-      serviceAccountName: sqlite-roam-controller
+      serviceAccountName: sqlite-csi-controller
       {{- if .Values.pullSecret }}
       imagePullSecrets: [{name: {{ .Values.pullSecret }}}]
       {{- end }}
@@ -170,14 +170,14 @@ spec:
 ---
 apiVersion: apps/v1
 kind: DaemonSet
-metadata: {name: sqlite-roam-node}
+metadata: {name: sqlite-csi-node}
 spec:
-  selector: {matchLabels: {app: sqlite-roam-node}}
+  selector: {matchLabels: {app: sqlite-csi-node}}
   updateStrategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 1}}
   template:
-    metadata: {labels: {app: sqlite-roam-node}}
+    metadata: {labels: {app: sqlite-csi-node}}
     spec:
-      serviceAccountName: sqlite-roam-node
+      serviceAccountName: sqlite-csi-node
       # A returning fenced node still needs its agent to clean stale mounts.
       tolerations:
         - {key: node.kubernetes.io/out-of-service, operator: Exists, effect: NoExecute}
@@ -199,18 +199,18 @@ spec:
           volumeMounts:
             - {name: socket, mountPath: /csi}
             - {name: kubelet, mountPath: {{ .Values.kubeletPath }}, mountPropagation: Bidirectional}
-            - {name: local, mountPath: /var/lib/sqlite-roam}
+            - {name: local, mountPath: /var/lib/sqlite-csi}
             - {name: backing, mountPath: /replicas}
         - name: registrar
           image: {{ .Values.registrarImage }}
-          args: [--csi-address=/csi/csi.sock, --kubelet-registration-path={{ .Values.kubeletPath }}/plugins/sqlite-roam.csi/csi.sock]
+          args: [--csi-address=/csi/csi.sock, --kubelet-registration-path={{ .Values.kubeletPath }}/plugins/sqlite.csi/csi.sock]
           resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {memory: 64Mi}}
           securityContext: {runAsUser: 0, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
           volumeMounts:
             - {name: socket, mountPath: /csi}
             - {name: registration, mountPath: /registration}
       volumes:
-        - {name: socket, hostPath: {path: {{ .Values.kubeletPath }}/plugins/sqlite-roam.csi, type: DirectoryOrCreate}}
+        - {name: socket, hostPath: {path: {{ .Values.kubeletPath }}/plugins/sqlite.csi, type: DirectoryOrCreate}}
         - {name: registration, hostPath: {path: {{ .Values.kubeletPath }}/plugins_registry, type: Directory}}
         - {name: kubelet, hostPath: {path: {{ .Values.kubeletPath }}, type: Directory}}
         - {name: local, hostPath: {path: {{ .Values.localPath }}, type: DirectoryOrCreate}}

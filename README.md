@@ -1,6 +1,6 @@
-# sqlite-roam
+# kubernetes-sqlite-csi
 
-[![CI](https://github.com/Pukata/sqlite-roam/actions/workflows/ci.yml/badge.svg)](https://github.com/Pukata/sqlite-roam/actions/workflows/ci.yml)
+[![CI](https://github.com/Pukata/kubernetes-sqlite-csi/actions/workflows/ci.yml/badge.svg)](https://github.com/Pukata/kubernetes-sqlite-csi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Let your SQLite app move between Kubernetes nodes.**
@@ -52,31 +52,31 @@ There is no published release image or hosted chart repository yet. Build and
 push an image to your own registry:
 
 ```sh
-docker build -t your-registry/sqlite-roam:dev .
-docker push your-registry/sqlite-roam:dev
-kubectl create namespace sqlite-roam-system
+docker build -t your-registry/sqlite-csi:dev .
+docker push your-registry/sqlite-csi:dev
+kubectl create namespace sqlite-csi-system
 ```
 
-Create an existing shared RWX claim named `sqlite-roam-replicas` in that
+Create an existing shared RWX claim named `sqlite-csi-replicas` in that
 namespace, then install:
 
 ```sh
-kubectl label node worker-a worker-b sqlite-roam.csi/enabled=true
-helm upgrade --install sqlite-roam ./charts/sqlite-roam \
-  --namespace sqlite-roam-system \
-  --set image=your-registry/sqlite-roam:dev \
-  --set localPath=/mnt/ssd/sqlite-roam
+kubectl label node worker-a worker-b sqlite.csi/enabled=true
+helm upgrade --install sqlite-csi ./charts/sqlite-csi \
+  --namespace sqlite-csi-system \
+  --set image=your-registry/sqlite-csi:dev \
+  --set localPath=/mnt/ssd/sqlite-csi
 ```
 
 Alternatively, set `createBackingClaim=true` and `backingStorageClass` to an
 existing shared RWX storage class. The driver does not provision that backend.
 
-Use `storageClassName: sqlite-roam`, `accessModes: [ReadWriteOncePod]`, one app
+Use `storageClassName: sqlite-csi`, `accessModes: [ReadWriteOncePod]`, one app
 replica and the `Recreate` strategy. Mount the claim at `/data` and configure the
 application to open `/data/database.db`. See [the example](examples/sqlite.yaml).
 
 The default class requires a verified clean handover. An unreachable writer
-stays locked. Opt-in `sqlite-roam-ha` recovery additionally requires confirmed
+stays locked. Opt-in `sqlite-csi-ha` recovery additionally requires confirmed
 independent fencing and explicit acceptance of the latest-replica policy.
 Read [failure recovery](docs/failure-recovery.md) before enabling it. The
 Kubernetes control plane must also survive the failed node.
@@ -95,7 +95,7 @@ See [testing](docs/testing.md) and [contributing](CONTRIBUTING.md).
 
 ## Project status
 
-The CSI identity is `sqlite-roam.csi`. The interfaces and on-disk state are
+The CSI identity is `sqlite.csi`. The interfaces and on-disk state are
 pre-release and may change. Keep workloads on a pinned, tested revision and
 validate restore and failover with disposable data before adopting an upgrade.
 

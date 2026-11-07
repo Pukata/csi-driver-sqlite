@@ -252,7 +252,7 @@ func (a *API) Volumes(ctx context.Context) ([]Volume, error) {
 	var list struct {
 		Items []configMap `json:"items"`
 	}
-	err := a.request(ctx, "GET", a.path("")+"?labelSelector="+url.QueryEscape("sqlite-roam.csi/volume=true"), nil, &list)
+	err := a.request(ctx, "GET", a.path("")+"?labelSelector="+url.QueryEscape("sqlite.csi/volume=true"), nil, &list)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +284,7 @@ func (a *API) Quarantine(ctx context.Context, node FenceNode) error {
 			return nil
 		}
 	}
-	taints = append(taints, map[string]any{"key": "node.kubernetes.io/out-of-service", "value": "sqlite-roam-fenced", "effect": "NoExecute"})
+	taints = append(taints, map[string]any{"key": "node.kubernetes.io/out-of-service", "value": "sqlite-csi-fenced", "effect": "NoExecute"})
 	patch := []map[string]any{{"op": "test", "path": "/metadata/uid", "value": node.UID},
 		{"op": "test", "path": "/metadata/resourceVersion", "value": current.Metadata.ResourceVersion},
 		{"op": "add", "path": "/spec/unschedulable", "value": true}, {"op": "add", "path": "/spec/taints", "value": taints}}

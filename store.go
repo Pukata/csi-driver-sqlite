@@ -134,7 +134,7 @@ func (a *API) Get(ctx context.Context, id string) (Volume, error) {
 func (a *API) Create(ctx context.Context, v Volume) (Volume, error) {
 	cm := configMap{APIVersion: "v1", Kind: "ConfigMap", Data: map[string]string{}}
 	cm.Metadata.Name = v.ID
-	cm.Metadata.Labels = map[string]string{"sqlite-roam.csi/volume": "true"}
+	cm.Metadata.Labels = map[string]string{"sqlite.csi/volume": "true"}
 	b, _ := json.Marshal(v)
 	cm.Data["volume.json"] = string(b)
 	e := a.request(ctx, "POST", a.path(""), cm, nil)
