@@ -1,6 +1,6 @@
-# kubernetes-sqlite-csi
+# csi-driver-sqlite
 
-[![CI](https://github.com/Pukata/kubernetes-sqlite-csi/actions/workflows/ci.yml/badge.svg)](https://github.com/Pukata/kubernetes-sqlite-csi/actions/workflows/ci.yml)
+[![CI](https://github.com/Pukata/csi-driver-sqlite/actions/workflows/ci.yml/badge.svg)](https://github.com/Pukata/csi-driver-sqlite/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Let your SQLite app move between Kubernetes nodes.**
@@ -80,6 +80,28 @@ stays locked. Opt-in `sqlite-csi-ha` recovery additionally requires confirmed
 independent fencing and explicit acceptance of the latest-replica policy.
 Read [failure recovery](docs/failure-recovery.md) before enabling it. The
 Kubernetes control plane must also survive the failed node.
+
+## Common questions
+
+### Why is my SQLite Pod tied to one node?
+
+A normal local PersistentVolume has node affinity. Kubernetes schedules its
+consumer on that node. This driver provisions a logical volume without node
+affinity and prepares a separate local working directory on the selected node.
+
+### How does the database move?
+
+During a clean handover, the driver verifies the final shared replica before
+releasing the old writer. The replacement restores that replica into its own
+local storage before the PVC is mounted. The application continues using its
+usual SQLite path. Attachments belong on a separate application volume.
+
+### What if the old node suddenly fails?
+
+The default class keeps ownership locked. Opt-in automatic recovery requires
+an independent fence that confirms the old machine is stopped and cannot
+restart. It then restores the latest valid replica; unpublished writes can be
+lost. The Kubernetes control plane and replica backend must still be available.
 
 ## Development and tests
 

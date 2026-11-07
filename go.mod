@@ -1,4 +1,4 @@
-module github.com/Pukata/kubernetes-sqlite-csi
+module github.com/Pukata/csi-driver-sqlite
 
 go 1.26.0
 
