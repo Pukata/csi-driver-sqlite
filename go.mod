@@ -1,4 +1,4 @@
-module github.com/Pukata/sqlite-roam
+module github.com/Pukata/kubernetes-sqlite-csi
 
 go 1.26.0
 

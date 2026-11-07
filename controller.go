@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const driverName = "sqlite-roam.csi"
+const driverName = "sqlite.csi"
 
 var validID = regexp.MustCompile(`^v-[a-f0-9]{32}$`)
 var validDatabase = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)

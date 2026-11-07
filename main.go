@@ -35,10 +35,10 @@ func (*Identity) Probe(context.Context, *csi.ProbeRequest) (*csi.ProbeResponse, 
 func main() {
 	mode := flag.String("mode", "node", "node or controller")
 	endpoint := flag.String("endpoint", "/csi/csi.sock", "Unix socket")
-	root := flag.String("local-root", "/var/lib/sqlite-roam", "node SSD directory")
+	root := flag.String("local-root", "/var/lib/sqlite-csi", "node SSD directory")
 	backing := flag.String("backing-root", "/replicas", "shared replica mount")
 	kubelet := flag.String("kubelet-root", "/var/lib/kubelet", "kubelet root")
-	namespace := flag.String("namespace", "sqlite-roam-system", "state namespace")
+	namespace := flag.String("namespace", "sqlite-csi-system", "state namespace")
 	nodeID := flag.String("node-id", os.Getenv("NODE_NAME"), "Kubernetes node name")
 	fencingConfig := flag.String("fencing-config", "", "opt-in external fencing configuration")
 	flag.Parse()
