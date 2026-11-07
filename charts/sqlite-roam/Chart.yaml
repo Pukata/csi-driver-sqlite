@@ -1,0 +1,6 @@
+apiVersion: v2
+name: sqlite-roam
+description: SQLite-aware CSI driver with local working storage and verified replica handover
+type: application
+version: 0.2.0-dev
+appVersion: 0.2.0-dev

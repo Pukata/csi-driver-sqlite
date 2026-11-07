@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sqlite-demo
+spec:
+  storageClassName: sqlite-roam
+  accessModes: [ReadWriteOncePod]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sqlite-demo
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: sqlite-demo}
+  template:
+    metadata:
+      labels: {app: sqlite-demo}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {sqlite-roam.csi/enabled: 'true'}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: app
+          image: python:3.13.18-alpine3.24@sha256:7984cf56ceaddebe4fefeb75d64000b9f45d8b77b11a09b24524da6cdc3af0c8
+          command: [python, -c]
+          args:
+            - |
+              import sqlite3,time
+              from http.server import BaseHTTPRequestHandler,HTTPServer
+              db=sqlite3.connect('/data/database.db')
+              db.execute('pragma journal_mode=WAL')
+              db.execute('create table if not exists visits (at text)')
+              db.commit()
+              class Handler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                  db.execute('insert into visits values (?)',(str(time.time()),))
+                  db.commit()
+                  count=db.execute('select count(*) from visits').fetchone()[0]
+                  self.send_response(200);self.end_headers()
+                  self.wfile.write(('Visits: '+str(count)+'\n').encode())
+              HTTPServer(('0.0.0.0',8080),Handler).serve_forever()
+          ports: [{name: http, containerPort: 8080}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: database, mountPath: /data}
+      volumes:
+        - name: database
+          persistentVolumeClaim: {claimName: sqlite-demo}

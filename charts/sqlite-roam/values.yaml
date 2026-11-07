@@ -1,0 +1,20 @@
+image: sqlite-roam:dev
+pullSecret: ''
+createBackingClaim: false
+backingClaim: sqlite-roam-replicas
+backingStorageClass: ''
+backingSize: 20Gi
+storageClass: sqlite-roam
+controllerNodeSelector:
+  kubernetes.io/os: linux
+nodeSelector:
+  sqlite-roam.csi/enabled: 'true'
+localPath: /var/lib/sqlite-roam-data
+kubeletPath: /var/lib/kubelet
+provisionerImage: registry.k8s.io/sig-storage/csi-provisioner:v6.3.0
+attacherImage: registry.k8s.io/sig-storage/csi-attacher:v4.12.0
+registrarImage: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.17.0
+failover:
+  enabled: false
+  configSecret: ''
+  storageClass: sqlite-roam-ha

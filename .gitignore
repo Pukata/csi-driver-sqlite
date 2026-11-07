@@ -1,0 +1,17 @@
+/bin/
+/.lab/
+*.tar
+*.tar.gz
+*.test
+coverage.out
+.env
+__pycache__/
+*.pyc
+fencing-token
+kubeconfig
+
+/.e2e/
+*.key
+/.venv/
+/.idea/
+/.vscode/
