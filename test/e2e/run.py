@@ -172,7 +172,7 @@ with tempfile.TemporaryDirectory() as d:
         token_path = self.root/'token'
         token_path.write_text(token)
         token_path.chmod(0o600)
-        self.fencer = FenceServer(self.mappings, token, self.replicas, certificate, key)
+        self.fencer = FenceServer(self.mappings, token, self.replicas, certificate, key, self.image)
         config = {'endpoint':f'https://{self.gateway}:{self.fencer.port}', 'caFile':'/fencing/ca.pem',
                   'tokenFile':'/fencing/token', 'manualPowerOnOnly':True,'graceSeconds':5,
                   'nodes':{name:{'nodeUID':m['nodeUID'],'machineID':m['machineID']} for name,m in self.mappings.items()}}
@@ -248,13 +248,14 @@ with tempfile.TemporaryDirectory() as d:
         self.wait('partitioned writer still commits and publishes while fence is denied',lambda:self.replica_records()==expected)
         self.fencer.deny = False
         self.wait('independent fence actually terminates old worker',lambda:not self.inspect(source)['State']['Running'])
-        held = self.replicas/self.volume_id/'.held-replica'
-        self.wait('missing replica leaves fenced owner locked',lambda:held.exists() and self.volume().get('recovery',{}).get('phase')=='fenced')
+        self.wait('missing replica leaves fenced owner locked',lambda:self.fencer.archive(self.volume_id,'held')
+                  and self.volume().get('recovery',{}).get('phase')=='fenced')
         time.sleep(8)
         assert self.volume()['owner']==source and self.volume()['epoch']==before['epoch']
         assert not self.app(), 'Missing replica created an empty replacement'
-        self.fencer.hide_volume = None
-        held.rename(held.with_name('replica'))
+        with self.fencer.lock:
+            self.fencer.hide_volume = None
+            self.fencer.archive(self.volume_id,'restore')
         replacement = self.wait('replacement writer ready on other worker',self.app,300)
         assert replacement['spec']['nodeName']!=source
         assert self.get('pv',pv_name)['metadata']['uid']==pv['metadata']['uid']
