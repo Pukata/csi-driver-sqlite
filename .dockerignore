@@ -1,0 +1,15 @@
+.git
+.github
+.lab
+bin
+charts
+docs
+examples
+hack
+*.tar
+*.tar.gz
+coverage.out
+
+.e2e
+test
+coverage.out

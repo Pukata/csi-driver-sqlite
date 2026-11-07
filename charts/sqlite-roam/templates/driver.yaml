@@ -1,0 +1,218 @@
+{{- if .Values.createBackingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.backingClaim }}
+  annotations: {helm.sh/resource-policy: keep}
+spec:
+  storageClassName: {{ required "set backingStorageClass to a shared RWX class" .Values.backingStorageClass }}
+  accessModes: [ReadWriteMany]
+  resources: {requests: {storage: {{ .Values.backingSize }}}}
+---
+{{- end }}
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: sqlite-roam.csi
+spec:
+  attachRequired: true
+  podInfoOnMount: true
+  fsGroupPolicy: None
+  requiresRepublish: true
+  volumeLifecycleModes: [Persistent]
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storageClass }}
+  annotations: {storageclass.kubernetes.io/is-default-class: 'false'}
+provisioner: sqlite-roam.csi
+parameters:
+  database: database.db
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: false
+---
+{{- if .Values.failover.enabled }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.failover.storageClass }}
+provisioner: sqlite-roam.csi
+parameters:
+  database: database.db
+  recoveryPolicy: latest-replica
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: false
+---
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: sqlite-roam-controller}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: sqlite-roam-node}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: sqlite-roam-controller}
+rules:
+  - apiGroups: ['']
+    resources: [persistentvolumes]
+    verbs: [get, list, watch, create, delete, update, patch]
+  - apiGroups: ['']
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: ['']
+    resources: [nodes]
+    verbs: [get, list, watch]
+  {{- if .Values.failover.enabled }}
+  - apiGroups: ['']
+    resources: [nodes]
+    verbs: [patch]
+  {{- end }}
+  - apiGroups: ['']
+    resources: [events]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses, csinodes, csidrivers]
+    verbs: [get, list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [volumeattachments, volumeattachments/status]
+    verbs: [get, list, watch, create, delete, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: sqlite-roam-controller}
+subjects: [{kind: ServiceAccount, name: sqlite-roam-controller, namespace: {{ .Release.Namespace }}}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: sqlite-roam-controller}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: sqlite-roam-state}
+rules:
+  - apiGroups: ['']
+    resources: [configmaps]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: sqlite-roam-state}
+subjects:
+  - {kind: ServiceAccount, name: sqlite-roam-controller}
+  - {kind: ServiceAccount, name: sqlite-roam-node}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: sqlite-roam-state}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: sqlite-roam-controller}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: sqlite-roam-controller}}
+  template:
+    metadata: {labels: {app: sqlite-roam-controller}}
+    spec:
+      serviceAccountName: sqlite-roam-controller
+      {{- if .Values.pullSecret }}
+      imagePullSecrets: [{name: {{ .Values.pullSecret }}}]
+      {{- end }}
+      tolerations:
+        - {key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 15}
+        - {key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 15}
+      nodeSelector:
+{{ toYaml .Values.controllerNodeSelector | indent 8 }}
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: driver
+          image: {{ .Values.image | quote }}
+          args:
+            - --mode=controller
+            - --namespace={{ .Release.Namespace }}
+            {{- if .Values.failover.enabled }}
+            - --fencing-config=/fencing/config.json
+            {{- end }}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {memory: 128Mi}}
+          volumeMounts:
+            - {name: socket, mountPath: /csi}
+            - {name: backing, mountPath: /replicas}
+            {{- if .Values.failover.enabled }}
+            - {name: fencing, mountPath: /fencing, readOnly: true}
+            {{- end }}
+        - name: provisioner
+          image: {{ .Values.provisionerImage }}
+          args: [--csi-address=/csi/csi.sock, --leader-election, --timeout=120s, --extra-create-metadata]
+          resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {memory: 128Mi}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: socket, mountPath: /csi}]
+        - name: attacher
+          image: {{ .Values.attacherImage }}
+          args: [--csi-address=/csi/csi.sock, --leader-election, --timeout=120s]
+          resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {memory: 128Mi}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: socket, mountPath: /csi}]
+      volumes:
+        {{- if .Values.failover.enabled }}
+        - name: fencing
+          secret:
+            secretName: {{ required "failover.configSecret must contain config.json, CA and scoped token" .Values.failover.configSecret }}
+            defaultMode: 0440
+        {{- end }}
+        - {name: socket, emptyDir: {}}
+        - name: backing
+          persistentVolumeClaim: {claimName: {{ .Values.backingClaim }}}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: sqlite-roam-node}
+spec:
+  selector: {matchLabels: {app: sqlite-roam-node}}
+  updateStrategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 1}}
+  template:
+    metadata: {labels: {app: sqlite-roam-node}}
+    spec:
+      serviceAccountName: sqlite-roam-node
+      # A returning fenced node still needs its agent to clean stale mounts.
+      tolerations:
+        - {key: node.kubernetes.io/out-of-service, operator: Exists, effect: NoExecute}
+      {{- if .Values.pullSecret }}
+      imagePullSecrets: [{name: {{ .Values.pullSecret }}}]
+      {{- end }}
+      nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 8 }}
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: driver
+          image: {{ .Values.image | quote }}
+          args: [--mode=node, --namespace={{ .Release.Namespace }}, --kubelet-root={{ .Values.kubeletPath }}]
+          env:
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+          securityContext: {privileged: true, runAsUser: 0}
+          resources: {requests: {cpu: 25m, memory: 64Mi}, limits: {memory: 512Mi}}
+          volumeMounts:
+            - {name: socket, mountPath: /csi}
+            - {name: kubelet, mountPath: {{ .Values.kubeletPath }}, mountPropagation: Bidirectional}
+            - {name: local, mountPath: /var/lib/sqlite-roam}
+            - {name: backing, mountPath: /replicas}
+        - name: registrar
+          image: {{ .Values.registrarImage }}
+          args: [--csi-address=/csi/csi.sock, --kubelet-registration-path={{ .Values.kubeletPath }}/plugins/sqlite-roam.csi/csi.sock]
+          resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {memory: 64Mi}}
+          securityContext: {runAsUser: 0, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: socket, mountPath: /csi}
+            - {name: registration, mountPath: /registration}
+      volumes:
+        - {name: socket, hostPath: {path: {{ .Values.kubeletPath }}/plugins/sqlite-roam.csi, type: DirectoryOrCreate}}
+        - {name: registration, hostPath: {path: {{ .Values.kubeletPath }}/plugins_registry, type: Directory}}
+        - {name: kubelet, hostPath: {path: {{ .Values.kubeletPath }}, type: Directory}}
+        - {name: local, hostPath: {path: {{ .Values.localPath }}, type: DirectoryOrCreate}}
+        - name: backing
+          persistentVolumeClaim: {claimName: {{ .Values.backingClaim }}}
