@@ -3,13 +3,41 @@
 [![CI](https://github.com/Pukata/csi-driver-sqlite/actions/workflows/ci.yml/badge.svg)](https://github.com/Pukata/csi-driver-sqlite/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Let your SQLite app move between Kubernetes nodes.**
+**Let your self-hosted SQLite apps move between nodes in your Kubernetes homelab.**
 
-SQLite is a good fit for many small applications, but an ordinary local PVC
-ties their data to one node. This experimental CSI driver keeps the working
-database on local storage and streams a replica to a shared filesystem using
-[Litestream](https://litestream.io/). Before a clean handover, it restores and
-verifies the replica; the next node restores before exposing the volume.
+You start with a few self-hosted apps. They use SQLite, so each app needs a
+container, a data directory, and very little database administration. Then you
+add a second machine and try Kubernetes: learning how Pods move, how to take a
+node down for maintenance, and how services recover when something stops.
+
+The application can move. Its database file is still on the first machine.
+
+## The homelab problem
+
+A local PersistentVolume has node affinity: Kubernetes schedules the app where
+that disk exists. Adding another node does not replicate the database or make
+the PVC portable. A node outage can leave the app waiting for its original
+storage. See [Kubernetes local volumes](https://kubernetes.io/docs/concepts/storage/volumes/#local).
+
+Putting the live database on a network share is not a universal shortcut.
+SQLite has filesystem locking and durability requirements, and its WAL mode
+requires processes accessing the database to share a host. See SQLite's
+[network filesystem caveats](https://sqlite.org/useovernet.html) and
+[WAL documentation](https://sqlite.org/wal.html). Running more app replicas also
+does not create independent, coordinated copies of its database.
+
+For a homelabber learning Kubernetes, the goal is modest: keep the app's simple
+SQLite setup and local-disk writes, but let its single instance follow its Pod
+to another node. You should be able to reason about where the data is and what
+recovery can preserve.
+
+## How this driver helps
+
+This experimental CSI driver keeps the working database on local storage and
+streams a replica to a shared filesystem using [Litestream](https://litestream.io/).
+Before a clean handover, it restores and verifies the replica; the next node
+restores before exposing the volume. The app continues using a normal PVC and
+its usual SQLite path.
 
 ```mermaid
 flowchart LR
@@ -21,6 +49,17 @@ flowchart LR
 > **Experimental storage software.** Keep independent backups. Replication is
 > asynchronous, so writes that have not reached the replica can be lost after
 > sudden failure. This project does not promise production availability.
+
+## One app replica, by design
+
+This is for the common homelab setup: one instance of each self-hosted SQLite
+app. Extra Kubernetes nodes let you move that instance for maintenance or
+recovery; they do not turn it into several concurrent app instances.
+
+Run **one application replica per database volume**, with `ReadWriteOncePod`
+and the `Recreate` strategy. The volume permits one active Pod. Each separate
+app can have its own PVC and move independently. The design provides storage
+mobility and controlled recovery, rather than horizontal scaling of a SQLite app.
 
 ## What it does
 
