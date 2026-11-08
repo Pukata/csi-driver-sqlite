@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New experimental version, for example v0.2.0-alpha.1'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: {persist-credentials: false}
+      - name: Validate immutable prerelease version
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/tags" --paginate --jq '.[].name' > /tmp/tag-names
+          if grep -Fxq "$VERSION" /tmp/tag-names; then echo 'Tag already exists'; exit 1; fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$GITHUB_SHA"
+
+  checks:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [validate, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: {persist-credentials: false}
+      - name: Install Helm
+        run: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+          curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
+          curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz.sha256sum
+          sha256sum --check helm-v3.19.0-linux-amd64.tar.gz.sha256sum
+          tar -xzf helm-v3.19.0-linux-amd64.tar.gz
+          echo "$PWD/linux-amd64" >> "$GITHUB_PATH"
+      - name: Build and publish tested image and OCI chart
+        shell: bash
+        run: |
+          set -euo pipefail
+          namespace="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/$namespace/csi-driver-sqlite:$VERSION"
+          fence="ghcr.io/$namespace/csi-driver-sqlite-fence-redfish:$VERSION"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build --build-arg VERSION="$VERSION" --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "$image" .
+          docker build -f integrations/redfish/Dockerfile --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "$fence" .
+          docker push "$image"
+          docker push "$fence"
+          sed -i "s|^image: .*|image: $image|" charts/sqlite-csi/values.yaml
+          helm package charts/sqlite-csi --version "${VERSION#v}" --app-version "$VERSION" --destination dist
+          helm push "dist/sqlite-csi-${VERSION#v}.tgz" "oci://ghcr.io/$namespace/charts"
+          docker buildx imagetools inspect "$image" > dist/image-manifest.txt
+          docker buildx imagetools inspect "$fence" > dist/fencing-image-manifest.txt
+          printf '%s\n' "$GITHUB_SHA" > dist/source-revision.txt
+          (cd dist && sha256sum *.tgz *manifest.txt source-revision.txt > SHA256SUMS)
+          cp docs/release-notes.md dist/notes.md
+          printf '\nVersion: %s\nSource: %s\n\nImage: `%s`\n\nChart: `oci://ghcr.io/%s/charts/sqlite-csi`\n\nArchitecture: linux/amd64. Experimental; asynchronous replication can lose unpublished writes.\n' "$VERSION" "$GITHUB_SHA" "$image" "$namespace" >> dist/notes.md
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "$VERSION (experimental)" --notes-file dist/notes.md dist/*.tgz dist/SHA256SUMS dist/*manifest.txt dist/source-revision.txt

@@ -172,7 +172,11 @@ const digestProgram = `import sqlite3,hashlib,json,sys
 db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True,timeout=15)
 db.execute('begin')
 assert db.execute('pragma integrity_check').fetchone()[0]=='ok', 'SQLite integrity failure'
-digest=hashlib.sha256('\n'.join(db.iterdump()).encode()).hexdigest()
+digest=hashlib.sha256()
+for index,line in enumerate(db.iterdump()):
+    if index: digest.update(b'\n')
+    digest.update(line.encode())
+digest=digest.hexdigest()
 db.rollback();db.close()
 print(digest)
 `

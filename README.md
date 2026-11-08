@@ -19,6 +19,13 @@ that disk exists. Adding another node does not replicate the database or make
 the PVC portable. A node outage can leave the app waiting for its original
 storage. See [Kubernetes local volumes](https://kubernetes.io/docs/concepts/storage/volumes/#local).
 
+There are established ways to solve this, including Longhorn and Ceph. They
+provide general distributed storage, but also bring another system to learn,
+monitor, upgrade and recover. For a small homelab, that can feel like needing
+to level up in storage administration before you can practise moving a Pod.
+You may want to learn Kubernetes first, with one instance of each SQLite app,
+before taking on a distributed storage system.
+
 Putting the live database on a network share is not a universal shortcut.
 SQLite has filesystem locking and durability requirements, and its WAL mode
 requires processes accessing the database to share a host. See SQLite's
@@ -30,6 +37,10 @@ For a homelabber learning Kubernetes, the goal is modest: keep the app's simple
 SQLite setup and local-disk writes, but let its single instance follow its Pod
 to another node. You should be able to reason about where the data is and what
 recovery can preserve.
+
+This driver explores that narrower goal. It still needs shared replica storage
+and deliberate recovery controls; it trades general-purpose storage features
+for a SQLite-specific workflow. See the [alternatives](docs/alternatives.md).
 
 ## How this driver helps
 
@@ -84,6 +95,16 @@ test your storage backend before trusting it with data.
 The provisioned capacity is descriptive: this driver does not partition disks,
 enforce byte quotas or implement volume expansion. The Kubernetes integration
 is exercised in CI on the versions listed in [the test guide](docs/testing.md).
+
+## Start here
+
+- [Gatus: one database PVC and an executable compatibility testcase](docs/gatus.md).
+- [Homebox: split database and attachment migration](docs/homebox-migration.md).
+- [Alternatives and when this driver does not fit](docs/alternatives.md).
+- [Resource and correctness testcases](docs/performance.md).
+- [Redfish fencing integration](integrations/redfish/README.md).
+- [Design walkthrough and failure evidence](docs/walkthrough.md).
+- [Release installation and maintainer procedure](docs/releases.md).
 
 ## Install from source
 

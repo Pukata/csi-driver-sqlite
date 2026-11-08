@@ -1,0 +1,15 @@
+{
+  "manualPowerOnOnly": true,
+  "tokenFile": "/config/token",
+  "nodes": {
+    "worker-a": {
+      "nodeUID": "replace-with-kubernetes-node-uid",
+      "uuid": "replace-with-redfish-computer-system-uuid",
+      "endpoint": "https://bmc.example",
+      "systemPath": "/redfish/v1/Systems/1",
+      "caFile": "/config/bmc-ca.pem",
+      "username": "dedicated-fencing-account",
+      "passwordFile": "/config/bmc-password"
+    }
+  }
+}

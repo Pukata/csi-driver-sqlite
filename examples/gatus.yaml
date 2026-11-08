@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gatus-config
+data:
+  config.yaml: |
+    storage:
+      type: sqlite
+      path: /data/database.db
+      maximum-number-of-results: 1000
+    endpoints:
+      - name: dashboard
+        url: http://127.0.0.1:8080/health
+        interval: 2s
+        conditions:
+          - "[STATUS] == 200"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gatus-db
+spec:
+  storageClassName: sqlite-csi
+  accessModes: [ReadWriteOncePod]
+  resources:
+    requests: {storage: 1Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gatus
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: gatus}}
+  template:
+    metadata: {labels: {app: gatus}}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {sqlite.csi/enabled: 'true'}
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true}
+      containers:
+        - name: gatus
+          image: twinproduction/gatus:v5.38.0
+          env: [{name: GATUS_CONFIG_PATH, value: /config/config.yaml}]
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 2}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {memory: 128Mi}}
+          volumeMounts:
+            - {name: database, mountPath: /data}
+            - {name: config, mountPath: /config, readOnly: true}
+      volumes:
+        - {name: database, persistentVolumeClaim: {claimName: gatus-db}}
+        - {name: config, configMap: {name: gatus-config}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gatus
+spec:
+  selector: {app: gatus}
+  ports: [{port: 8080, targetPort: http}]

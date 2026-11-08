@@ -305,6 +305,54 @@ print('ok')
         self.wait('returning worker has no stale publisher',lambda:self.k('exec','-n','sqlite-csi-system',agent['metadata']['name'],
                   '-c','driver','--','python3','-c',script)=='ok')
 
+    def gatus_test(self):
+        """Run the checked-in real application manifest; retain actual history across a move."""
+        self.k('uncordon', *self.workers)
+        # Parse with kubectl, so CI exercises the exact example without a YAML dependency.
+        objects = json.loads(self.k('create','--dry-run=client','-f',str(REPO/'examples/gatus.yaml'),'-o','json'))['items']
+        for obj in objects:
+            obj['metadata']['namespace'] = 'sqlite-test'
+            if obj['kind'] == 'Deployment':
+                obj['spec']['template']['spec']['nodeSelector']['kubernetes.io/hostname'] = self.workers[0]
+            self.apply(obj)
+        def app():
+            return next((p for p in self.pods('sqlite-test','app=gatus') if self.ready(p)),None)
+        original = self.wait('Gatus real application Ready on source node',app)
+        assert original['spec']['nodeName'] == self.workers[0]
+        pv_name = self.get('pvc','gatus-db','-n','sqlite-test')['spec']['volumeName']
+        pv = self.get('pv',pv_name)
+        volume_id = pv['spec']['csi']['volumeHandle']
+        def history(pod, restore=False):
+            volume = json.loads(self.get('cm',volume_id,'-n','sqlite-csi-system')['data']['volume.json'])
+            agent = next(p for p in self.pods('sqlite-csi-system','app=sqlite-csi-node')
+                         if p['spec']['nodeName']==pod['spec']['nodeName'] and self.ready(p))
+            path = f'/var/lib/sqlite-csi/{volume_id}/epoch-{volume["epoch"]}/database.db'
+            script = '''import json,sqlite3,sys,tempfile,subprocess
+from pathlib import Path
+path=sys.argv[1]
+with tempfile.TemporaryDirectory() as directory:
+ if sys.argv[2]:
+  path=directory+'/restored.db'
+  subprocess.run(['litestream','restore','-o',path,'file://'+sys.argv[2]],check=True,capture_output=True)
+ db=sqlite3.connect('file:'+path+'?mode=ro',uri=True)
+ assert db.execute('pragma integrity_check').fetchone()[0]=='ok'
+ print(json.dumps(db.execute('select endpoint_result_id,success,timestamp from endpoint_results order by endpoint_result_id').fetchall()))
+'''
+            replica = '/replicas/'+volume_id+'/'+volume.get('replicaDirectory','replica') if restore else ''
+            return json.loads(self.k('exec','-n','sqlite-csi-system',agent['metadata']['name'],'-c','driver',
+                                      '--','python3','-c',script,path,replica))
+        baseline = self.wait('Gatus writes real monitoring history to SQLite',lambda:(rows:=history(original)) and len(rows)>=3 and rows)
+        assert all(row[1] == 1 for row in baseline), 'Self-monitor checks failed'
+        self.wait('Gatus history verified in a fresh Litestream restore',lambda:all(row in history(original,True) for row in baseline))
+        self.k('patch','deployment','gatus','-n','sqlite-test','--type=merge','-p',json.dumps({
+            'spec':{'template':{'spec':{'nodeSelector':{'kubernetes.io/hostname':self.workers[1]}}}}}))
+        replacement = self.wait('Gatus clean handover to other node',lambda:(p:=app()) and p['spec']['nodeName']==self.workers[1] and p,300)
+        assert self.get('pv',pv_name)['metadata']['uid']==pv['metadata']['uid']
+        self.wait('Gatus retains original history and records new checks after move',
+                  lambda:(rows:=history(replacement)) and len(rows)>len(baseline) and all(row in rows for row in baseline))
+        self.wait('Gatus preserved history survives another fresh replica restore',
+                  lambda:all(row in history(replacement,True) for row in baseline))
+
     def collect(self, error):
         result = {'result':'FAIL' if error else 'PASS','cluster':self.name,'steps':self.steps,
                   'error':str(error) if error else None,'fencingEvents':self.fencer.events if self.fencer else []}
@@ -347,6 +395,7 @@ def main():
     try:
         suite.setup()
         suite.scenarios()
+        suite.gatus_test()
     except Exception as caught:
         error=caught
         print('FAIL '+str(error),file=sys.stderr,flush=True)

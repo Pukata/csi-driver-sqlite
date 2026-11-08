@@ -10,8 +10,10 @@ The end-to-end harness creates its own kind cluster and kubeconfig; never point
 fault injection at an existing cluster. Keep test credentials out of Git.
 
 For AI-assisted commits, retain the human author and add a `Co-authored-by`
-trailer identifying the AI tool and model actually used. Use a confirmed model
-name; do not invent one. This project's initial work used the maintainer-confirmed
-attribution `GPT-6.1 Sol (via Codex) <noreply@openai.com>`.
+trailer identifying the AI tool and model when independently confirmed. Do not
+invent a model identity or an official attribution mailbox. If the runtime model
+is unverified, identify only the tool, for example
+`Co-authored-by: Codex (AI assistance) <ai-assistance@example.invalid>`.
+The reserved invalid address records assistance without claiming an OpenAI account.
 Use a GitHub noreply address for the human identity and do not include personal
 email addresses. Attribution records assistance, not independent review.

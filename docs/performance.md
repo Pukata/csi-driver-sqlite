@@ -1,0 +1,39 @@
+# Correctness and resource testcases
+
+`make image benchmark` runs the shipped Litestream version and the exact digest
+program extracted from `node.go`. It uses a disposable, network-disabled container
+with 2 CPU and 512 MiB limits and a 1 GiB temporary filesystem. It never opens an
+existing database. The generated JSON is uploaded with the Kubernetes CI artifacts.
+
+Each of the 1, 16 and 64 MiB deterministic fixtures is a testcase, with assertions:
+
+- SQLite WAL commits converge to a fresh replica restore within 90 seconds.
+- A new committed marker becomes visible in a second verified restore.
+- Graceful publisher exit succeeds; restored and original logical digests match.
+- SQLite integrity checks pass.
+- Each sampled digest process stays below a broad 384 MiB regression budget.
+
+The test records fixture/database bytes, observed initial replication plus restore
+time, commit-to-verified-restore time, restore/digest durations and sampled child
+RSS. Timing includes polling/restore work; it is not pure network replication lag.
+RSS is sampled every 5 ms and can miss short peaks. Limits also apply to the whole
+container. A single large BLOB still makes a large SQL dump row: streaming the dump
+avoids joining the entire database into memory, not all allocations.
+
+These are measurements of one sample per size on the recorded runtime/kernel,
+with a local temporary filesystem. They are not NAS numbers, a latency SLA,
+whole-cluster memory measurements, or end-to-end Kubernetes failover times. The
+kind tests establish behavior under node faults separately. Restore and integrity
+verification cost grows with database size; unrelated volume operations currently
+share a node-agent mutex and can wait behind a slow operation.
+
+The chart requests 30m CPU/96Mi for its three controller containers and 35m
+CPU/80Mi per enabled node for agent plus registrar. These are scheduling requests,
+not measured consumption. Litestream runs as a child of the node agent for each
+active writable database, sharing its 512Mi memory limit. Size and measure that
+limit for your actual apps. Append-only publisher logs and retained histories also
+consume disk; monitor them and manage retention before adopting many volumes.
+
+Validated result snapshots and their exact CI source revision are stored under
+`docs/results/` when available. Re-run the test rather than assuming a previous
+runner's numbers predict your storage backend.

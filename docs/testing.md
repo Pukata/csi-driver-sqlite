@@ -38,6 +38,14 @@ The scenarios exercise:
 - Missing-replica refusal, followed by recovery when the replica returns.
 - Same-PV recovery on the other worker and separate replication history.
 - Old-worker return, stale-container/publisher checks, and clean rejoin.
+- The real pinned Gatus example: successful monitoring rows, fresh replica
+  restore, clean movement to another worker and preserved history plus new checks.
+
+`make integration-test` exercises the independent Redfish authority's protocol
+and refusal paths. `make benchmark` runs three database correctness/resource
+testcases in the built image; see [measurement limits](performance.md). These
+are regression checks in CI, not optional manual experiments. Redfish BMC
+responses are fixtures; physical server behavior is not established by them.
 
 Artifacts include a JSON scenario summary, Kubernetes events and pod/driver
 logs. Test tokens, TLS private keys and kubeconfigs are excluded from artifacts.

@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -30,6 +31,7 @@ jobs:
           go-version: ${{ matrix.go }}
           cache: true
       - run: make verify test build
+      - run: make integration-test
       - name: Lint workflow
         if: matrix.go == '1.27.x'
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml
@@ -81,6 +83,9 @@ jobs:
           chmod +x kubectl helm
           echo "$tools" >> "$GITHUB_PATH"
       - run: make chart image
+      - name: Assert replica correctness and measure resource use
+        if: matrix.kubernetes == '1.36.4'
+        run: make benchmark
       - name: Exercise CSI storage and recovery
         env:
           KIND_NODE_IMAGE: ${{ matrix.node-image }}

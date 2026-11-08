@@ -80,6 +80,10 @@ The driver necessarily trusts the external authority's implementation of this
 contract. The included Docker service is a **test fixture**, not a deployable
 production fencing service.
 
+An optional [Redfish authority](../integrations/redfish/README.md) implements
+this contract for supported BMCs. Its protocol has CI tests. Read its explicit
+manual-power-on and physical validation requirements before adopting it.
+
 ## Configuration
 
 Mount a Secret containing `config.json`, `ca.pem` and `token`. The token file

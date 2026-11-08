@@ -1,4 +1,4 @@
-.PHONY: fmt verify test build chart image e2e
+.PHONY: fmt verify test build chart image e2e integration-test benchmark
 
 IMAGE ?= sqlite-csi:e2e
 
@@ -26,3 +26,10 @@ image:
 
 e2e:
 	python3 test/e2e/run.py --image $(IMAGE)
+
+integration-test:
+	python3 -m unittest discover -s integrations/redfish -p 'test_*.py' -v
+
+benchmark:
+	mkdir -p .e2e/artifacts
+	docker run --rm --network=none --read-only --user=1000:1000 --memory=512m --cpus=2 --tmpfs /tmp:rw,size=1g,mode=1777 -e DRIVER_REVISION=$$(git rev-parse HEAD) -v "$$(pwd):/src:ro" --entrypoint python3 $(IMAGE) /src/test/bench/run.py > .e2e/artifacts/benchmark.json
