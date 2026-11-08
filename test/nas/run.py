@@ -199,7 +199,13 @@ class NasSuite(Suite):
         self.nas()
         assert re.fullmatch(r'v-[a-f0-9]{32}', self.volume_id)
         assert action in ('corrupt', 'incomplete', 'block-write', 'repair')
-        script = '''import pathlib,shutil,sys,uuid
+        script = '''import os,pathlib,shutil,sys,uuid
+# Match the publisher/controller identity, including restrictive NFS modes.
+# CIFS still authenticates through its existing mounted-share credentials.
+if os.geteuid()==0:
+ os.setgroups([])
+ os.setgid(1000)
+ os.setuid(1000)
 root=pathlib.Path('/replicas')
 matches=[p for p in root.rglob(sys.argv[1]) if p.is_dir() and not p.is_symlink()]
 assert len(matches)==1, 'volume directory must be unique'
@@ -366,7 +372,9 @@ def cases(s):
                 controller = s.controller()
                 if not controller: return 0
                 log = s.k('logs','-n','sqlite-csi-system',controller['metadata']['name'],'-c','driver','--tail=500')
-                return sum(s.volume_id in line and 'restore failed:' in line for line in log.splitlines())
+                return sum(s.volume_id in line and 'restore failed:' in line
+                           and (fault != 'corrupt' or 'invalid ltx file' in line.lower())
+                           for line in log.splitlines())
             controller = s.controller()
             self.assertIsNotNone(controller)
             port = 445 if hasattr(s, 'check_mount') else 2049
