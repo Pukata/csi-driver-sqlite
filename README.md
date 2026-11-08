@@ -3,190 +3,92 @@
 [![CI](https://github.com/Pukata/csi-driver-sqlite/actions/workflows/ci.yml/badge.svg)](https://github.com/Pukata/csi-driver-sqlite/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Let your self-hosted SQLite apps move between nodes in your Kubernetes homelab.**
+**Let one replica of your self-hosted SQLite app move between Kubernetes nodes.**
 
-You start with a few self-hosted apps. They use SQLite, so each app needs a
-container, a data directory, and very little database administration. Then you
-add a second machine and try Kubernetes: learning how Pods move, how to take a
-node down for maintenance, and how services recover when something stops.
+The app writes to local disk. [Litestream](https://litestream.io/) streams a
+replica to your existing NAS. For a planned move, Kubernetes stops the old Pod,
+the driver verifies the final replica, and the next node restores it before
+starting the app. Your app uses a normal PVC and its usual SQLite path.
 
-The application can move. Its database file is still on the first machine.
-
-## The homelab problem
-
-A local PersistentVolume has node affinity: Kubernetes schedules the app where
-that disk exists. Adding another node does not replicate the database or make
-the PVC portable. A node outage can leave the app waiting for its original
-storage. See [Kubernetes local volumes](https://kubernetes.io/docs/concepts/storage/volumes/#local).
-
-There are established ways to solve this, including Longhorn and Ceph. They
-provide general distributed storage, but also bring another system to learn,
-monitor, upgrade and recover. For a small homelab, that can feel like needing
-to level up in storage administration before you can practise moving a Pod.
-You may want to learn Kubernetes first, with one instance of each SQLite app,
-before taking on a distributed storage system.
-
-Putting the live database on a network share is not a universal shortcut.
-SQLite has filesystem locking and durability requirements, and its WAL mode
-requires processes accessing the database to share a host. See SQLite's
-[network filesystem caveats](https://sqlite.org/useovernet.html) and
-[WAL documentation](https://sqlite.org/wal.html). Running more app replicas also
-does not create independent, coordinated copies of its database.
-
-For a homelabber learning Kubernetes, the goal is modest: keep the app's simple
-SQLite setup and local-disk writes, but let its single instance follow its Pod
-to another node. You should be able to reason about where the data is and what
-recovery can preserve.
-
-This driver explores that narrower goal. It still needs shared replica storage
-and deliberate recovery controls; it trades general-purpose storage features
-for a SQLite-specific workflow. See the [alternatives](docs/alternatives.md).
-
-## How this driver helps
-
-This experimental CSI driver keeps the working database on local storage and
-streams a replica to a shared filesystem using [Litestream](https://litestream.io/).
-Before a clean handover, it restores and verifies the replica; the next node
-restores before exposing the volume. The app continues using a normal PVC and
-its usual SQLite path.
+**Node-loss recovery is manual.** An unreachable node keeps ownership; a
+replacement waits rather than starting a second writer. Replication is
+asynchronous, so sudden failure can lose recent writes. Keep independent backups.
 
 ```mermaid
 flowchart LR
-    App[Application PVC] --> Local[Local SQLite database]
-    Local -->|Litestream| Shared[Shared replica filesystem]
-    Shared -->|verified restore| Next[Local database on another node]
+    App[One application Pod] --> Local[Local SQLite database]
+    Local -->|Litestream| NAS[Existing shared NAS]
+    NAS -->|verified restore after clean release| Next[Local database on next node]
 ```
 
-> **Experimental storage software.** Keep independent backups. Replication is
-> asynchronous, so writes that have not reached the replica can be lost after
-> sudden failure. This project does not promise production availability.
+## What you need
 
-## One app replica, by design
+- Linux **amd64** Kubernetes nodes with local working storage.
+- An existing shared **RWX StorageClass** for the NAS replicas. Your NFS/SMB
+  provisioner supplies the mount; this driver does not provision the NAS.
+  The replica mount must be writable by UID/GID 1000.
+- One app replica, `ReadWriteOncePod`, the `Recreate` strategy, and app
+  **UID/GID 1000**. The Gatus example below already sets these.
+- Permission to install privileged CSI node agents.
+- One SQLite database per PVC. Put attachments and other files on separate volumes.
 
-This is for the common homelab setup: one instance of each self-hosted SQLite
-app. Extra Kubernetes nodes let you move that instance for maintenance or
-recovery; they do not turn it into several concurrent app instances.
+Kubernetes 1.35.8 and 1.36.4 are exercised in CI. Start with disposable data:
+this is an **experimental alpha**, and its state format can change.
 
-Run **one application replica per database volume**, with `ReadWriteOncePod`
-and the `Recreate` strategy. The volume permits one active Pod. Each separate
-app can have its own PVC and move independently. The design provides storage
-mobility and controlled recovery, rather than horizontal scaling of a SQLite app.
+## Quickstart: Gatus on a movable SQLite PVC
 
-## What it does
-
-- Presents a normal `ReadWriteOncePod` PVC to one application instance.
-- Keeps SQLite writes local; no application replication sidecar is required.
-- Uses persistent ownership, epochs and API compare-and-swap to guard handover.
-- Checks SQLite integrity and logical database contents before a clean release.
-- Blocks movement when final replica verification fails.
-- Keeps ownership locked after node loss; recovery is manual.
-
-One database file belongs on each volume. Store attachments and other files in
-separate application volumes. This is not a general filesystem replicator,
-multi-writer SQLite cluster, or replacement for backups.
-It does not migrate existing claims or application data; application backup,
-restore and migration procedures remain outside this driver's scope.
-
-## Requirements
-
-Use Linux Kubernetes nodes with local storage, privileged CSI node agents, and
-a shared RWX replica PVC. The current application UID and GID are **1000**.
-Local storage can be an HDD or SSD; no particular disk technology is required.
-The backing filesystem must support the file operations Litestream requires;
-test your storage backend before trusting it with data.
-
-The provisioned capacity is descriptive: this driver does not partition disks,
-enforce byte quotas or implement volume expansion. The Kubernetes integration
-is exercised in CI on the versions listed in [the test guide](docs/testing.md).
-
-## Start here
-
-- [Experimental release v0.2.0-alpha.1](https://github.com/Pukata/csi-driver-sqlite/releases/tag/v0.2.0-alpha.1)
-  and [recorded testcase results](docs/results/README.md).
-- [Gatus: one database PVC and an executable compatibility testcase](docs/gatus.md).
-- [Homebox: database and attachment storage layout](docs/homebox.md).
-- [Alternatives and when this driver does not fit](docs/alternatives.md).
-- [Resource and correctness testcases](docs/performance.md).
-- [Failure recovery and volume diagnosis](docs/failure-recovery.md).
-- [Independent backup restore](docs/independent-backup.md).
-- [Design walkthrough and failure evidence](docs/walkthrough.md).
-- [Release installation and maintainer procedure](docs/releases.md).
-
-## Install from source
-
-For versioned images and the OCI chart, see [release installation](docs/releases.md).
-To build your own development image instead:
+Install [v0.2.0-alpha.2](https://github.com/Pukata/csi-driver-sqlite/releases/tag/v0.2.0-alpha.2).
+Replace the worker names and `YOUR_SHARED_RWX_CLASS` with your own:
 
 ```sh
-docker build -t your-registry/sqlite-csi:dev .
-docker push your-registry/sqlite-csi:dev
 kubectl create namespace sqlite-csi-system
-```
-
-Create an existing shared RWX claim named `sqlite-csi-replicas` in that
-namespace, then install:
-
-```sh
+kubectl label namespace sqlite-csi-system pod-security.kubernetes.io/enforce=privileged
 kubectl label node worker-a worker-b sqlite.csi/enabled=true
-helm upgrade --install sqlite-csi ./charts/sqlite-csi \
-  --namespace sqlite-csi-system \
-  --set image=your-registry/sqlite-csi:dev \
-  --set localPath=/mnt/ssd/sqlite-csi
+
+helm upgrade --install sqlite-csi oci://ghcr.io/pukata/charts/sqlite-csi \
+  --version 0.2.0-alpha.2 --namespace sqlite-csi-system \
+  --set createBackingClaim=true \
+  --set backingStorageClass=YOUR_SHARED_RWX_CLASS \
+  --set localPath=/var/lib/sqlite-csi-data \
+  --wait --timeout 5m
+
+kubectl create namespace sqlite-demo
+kubectl apply -n sqlite-demo -f https://raw.githubusercontent.com/Pukata/csi-driver-sqlite/v0.2.0-alpha.2/examples/gatus.yaml
+kubectl rollout status -n sqlite-demo deployment/gatus
+kubectl port-forward -n sqlite-demo service/gatus 8080:8080
 ```
 
-Alternatively, set `createBackingClaim=true` and `backingStorageClass` to an
-existing shared RWX storage class. The driver does not provision that backend.
+Open <http://localhost:8080>. Gatus stores its monitoring history in the SQLite
+PVC. See the [Gatus walkthrough](docs/gatus.md) for the storage layout and the
+movement checks used in CI.
 
-Use `storageClassName: sqlite-csi`, `accessModes: [ReadWriteOncePod]`, one app
-replica and the `Recreate` strategy. Mount the claim at `/data` and configure the
-application to open `/data/database.db`. See [the example](examples/sqlite.yaml).
+Already have a shared RWX PVC? Create it in `sqlite-csi-system`, omit
+`createBackingClaim` and `backingStorageClass`, and set `backingClaim` to its name.
+See [release installation](docs/releases.md) for checksums and private-registry access.
 
-The class requires a verified clean handover. An unreachable writer stays
-locked; there is no automatic node-loss takeover or host power control. Read
-[failure recovery](docs/failure-recovery.md) for diagnosis and manual recovery,
-including migration of legacy automatic-recovery volumes before upgrading.
+## What happens when something fails?
 
-## Common questions
+- **App container exits:** Kubernetes restarts it; the database stays local.
+- **Planned node move:** the old Pod stops, the replica is verified, and the next
+  node restores it. Expect downtime for verification, restore and app startup.
+- **NAS unavailable or verification fails:** the move waits. Restore NAS access
+  and let Kubernetes retry.
+- **Node lost:** ownership stays locked. Follow the
+  [manual recovery guidance](docs/failure-recovery.md).
 
-### Why is my SQLite Pod tied to one node?
+Requested PVC capacity is descriptive; the driver does not enforce disk quotas
+or support expansion, cloning or snapshots. It replicates the configured
+database, not an entire application directory or several databases atomically.
 
-A normal local PersistentVolume has node affinity. Kubernetes schedules its
-consumer on that node. This driver provisions a logical volume without node
-affinity and prepares a separate local working directory on the selected node.
+## More examples and details
 
-### How does the database move?
+- [Homebox: separate database and attachment volumes](docs/homebox.md).
+- [Independent backups](docs/independent-backup.md).
+- [What the tests cover](docs/testing.md) and [recorded results](docs/results/README.md).
+- [Other storage approaches](docs/alternatives.md).
+- [Building and contributing](CONTRIBUTING.md).
 
-During a clean handover, the driver verifies the final shared replica before
-releasing the old writer. The replacement restores that replica into its own
-local storage before the PVC is mounted. The application continues using its
-usual SQLite path. Attachments belong on a separate application volume.
-
-### What if the old node suddenly fails?
-
-Ownership stays locked, even if Kubernetes schedules a replacement Pod. An
-operator must investigate the old writer and choose a manual recovery path.
-Recent writes may be missing from the replica. See the
-[manual recovery guidance](docs/failure-recovery.md); never clear ownership to
-force a replacement to start.
-
-## Development and tests
-
-```sh
-make verify test build chart
-make image e2e
-```
-
-CI runs formatting, static checks, Go race tests and coverage, Helm checks, and
-disposable multi-node Kubernetes storage and clean-movement scenarios. It uses GitHub-hosted
-runners and does not need access to an existing cluster or private infrastructure.
-See [testing](docs/testing.md) and [contributing](CONTRIBUTING.md).
-
-## Project status
-
-The CSI identity is `sqlite.csi`. The interfaces and on-disk state are
-pre-release and may change. Keep workloads on a pinned, tested revision and
-validate restore and clean movement with disposable data before adopting an upgrade.
-
-Licensed under [MIT](LICENSE). Litestream and the upstream Kubernetes CSI
-sidecars retain their respective licenses. See [security](SECURITY.md) for
-reporting and trust boundaries.
+Existing alpha.1 automatic-recovery volumes need
+[migration before upgrading](docs/failure-recovery.md#upgrading-legacy-automatic-recovery-volumes).
+The CSI identity is `sqlite.csi`. Licensed under [MIT](LICENSE);
+see [security](SECURITY.md) for reporting.

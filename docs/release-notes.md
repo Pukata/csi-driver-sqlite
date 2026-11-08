@@ -1,4 +1,4 @@
-# Experimental SQLite PVC mobility
+# v0.2.0-alpha.2: SQLite PVC mobility
 
 SQLite PVC mobility for one replica of a self-hosted service, using local working
 storage and Litestream replicas on an existing shared RWX filesystem.
@@ -21,4 +21,4 @@ Images target Linux amd64. The chart archive pins the release image tag. Record
 and pin the image digest from the attached manifest for repeatable installs.
 Package visibility is separate from repository visibility; private packages
 require registry credentials. Historical releases retain their original features
-and recorded test results; these notes describe the next release from this source.
+and recorded test results.

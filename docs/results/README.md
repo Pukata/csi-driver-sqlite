@@ -1,9 +1,27 @@
 # Recorded testcase results
 
-These observations are historical and apply to the source revisions named below.
-The current driver has removed automatic node-loss takeover and Redfish/fencing
-integration. Those earlier results are retained unchanged as evidence of the
-older implementation; see [current test scope](../testing.md).
+## Current simplified driver
+
+Source: `ee26bfca644e28f1ca67f479d160e933607a9f63`.
+[Passing CI workflow](https://github.com/Pukata/csi-driver-sqlite/actions/runs/42511657962).
+
+- Kubernetes 1.35.8 and 1.36.4 passed real CSI mounting, single-writer rejection,
+  driver restart, clean movement and Gatus history-preservation checks.
+- All three real-NFS cases passed: NAS restart, an unresponsive NAS blocking
+  handover until recovery, and failed replica writes blocking handover until repair.
+- Both Go versions, race checks, ownership mutations, chart/workflow checks,
+  resource checks and SMB protocol tests passed.
+- The upgrade-only job is reserved for manual/release validation.
+
+These tests use disposable data, clusters and an NFS server. They do not certify
+every NAS or promise preservation of unpublished writes after node loss.
+See [current test scope](../testing.md).
+
+## Historical results
+
+The observations below apply to their named source revisions. The current driver
+has removed automatic node-loss takeover and Redfish/fencing integration.
+Earlier results are retained unchanged as evidence of those implementations.
 
 ## SMB protocol failure modes
 
