@@ -87,7 +87,7 @@ class NasSuite(Suite):
                 'kubernetes.io/hostname':self.workers[1]}}}}}))
         self.wait('controller placed on surviving worker before faults',lambda:(p:=self.controller()) and p['spec']['nodeName']==self.workers[1])
         self.template = copy.deepcopy(self.get('deployment','sqlite-test','-n','sqlite-test')['spec'])
-        self.template['template']['spec']['nodeSelector']['kubernetes.io/hostname']=self.workers[0]
+        self.template['template']['spec']['nodeSelector'].pop('kubernetes.io/hostname',None)
         self.set_volume_id()
         self.remove_application()
         (self.artifacts/'topology.json').write_text(json.dumps({'backend':'NFSv4.1',
@@ -103,6 +103,15 @@ class NasSuite(Suite):
         self.volume_id = self.get('pv',self.pv_name)['spec']['csi']['volumeHandle']
 
     def create_application(self):
+        # Choose the initial worker without pinning the replacement to it.
+        self.k('cordon',self.workers[1])
+        try:
+            self._create_application()
+            assert self.app()['spec']['nodeName']==self.workers[0]
+        finally:
+            self.k('uncordon',self.workers[1])
+
+    def _create_application(self):
         self.apply({'apiVersion':'v1','kind':'PersistentVolumeClaim','metadata':{'name':'sqlite-test','namespace':'sqlite-test'},
             'spec':{'storageClassName':'sqlite-csi-ha','accessModes':['ReadWriteOncePod'],
                     'resources':{'requests':{'storage':'1Gi'}}}})

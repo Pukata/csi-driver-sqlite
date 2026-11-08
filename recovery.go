@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -302,7 +303,9 @@ func prepareReplica(backing string) func(context.Context, Volume, RecoveryRecord
 			return RecoveredReplica{}, err
 		}
 		if !exists(final) {
-			tmp, err := os.MkdirTemp(filepath.Dir(final), "restore-")
+			// Restore SQLite on local scratch, just as the node agent does. The
+			// shared filesystem stores immutable seeds, not working databases.
+			tmp, err := os.MkdirTemp("", "sqlite-csi-recovery-")
 			if err != nil {
 				return RecoveredReplica{}, err
 			}
@@ -319,12 +322,9 @@ func prepareReplica(backing string) func(context.Context, Volume, RecoveryRecord
 			if err != nil {
 				return RecoveredReplica{}, err
 			}
-			err = f.Sync()
+			err = publishRecoverySeed(f, final)
 			f.Close()
 			if err != nil {
-				return RecoveredReplica{}, err
-			}
-			if err = os.Rename(path, final); err != nil {
 				return RecoveredReplica{}, err
 			}
 		}
@@ -334,4 +334,37 @@ func prepareReplica(backing string) func(context.Context, Volume, RecoveryRecord
 		}
 		return RecoveredReplica{Path: relative, Digest: strings.TrimSpace(string(out))}, nil
 	}
+}
+
+// publishRecoverySeed flushes and reads back an immutable seed before publishing
+// its name. A failed copy or verification never exposes a partial final seed.
+// NAS durability still depends on the server honouring stable writes and rename.
+func publishRecoverySeed(source io.Reader, final string) error {
+	f, err := os.CreateTemp(filepath.Dir(final), ".seed-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	written := sha256.New()
+	if _, err = io.Copy(f, io.TeeReader(source, written)); err != nil {
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	if _, err = f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	readback := sha256.New()
+	if _, err = io.Copy(readback, f); err != nil {
+		return err
+	}
+	if string(written.Sum(nil)) != string(readback.Sum(nil)) {
+		return fmt.Errorf("recovery seed readback differs from verified local restore")
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), final)
 }

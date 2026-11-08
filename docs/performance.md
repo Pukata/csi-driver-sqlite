@@ -30,6 +30,13 @@ kind tests establish behavior under node faults separately. Restore and integrit
 verification cost grows with database size; unrelated volume operations currently
 share a node-agent mutex and can wait behind a slow operation.
 
+Unclean recovery restores and checks the database in the controller's local
+temporary directory, then flushes and verifies an immutable seed on the shared
+filesystem before ownership can change. Allow controller scratch disk space for
+a restored database and Litestream's temporary files. NAS stable-write and rename
+durability remain requirements; a verified readback cannot prove hardware power-loss
+durability.
+
 The chart requests 30m CPU/96Mi for its three controller containers and 35m
 CPU/80Mi per enabled node for agent plus registrar. These are scheduling requests,
 not measured consumption. Litestream runs as a child of the node agent for each

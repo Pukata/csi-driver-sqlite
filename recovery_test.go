@@ -3,10 +3,45 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRecoverySeedPublication(t *testing.T) {
+	dir := t.TempDir()
+	final := filepath.Join(dir, "database.db")
+	if err := publishRecoverySeed(strings.NewReader("verified seed"), final); err != nil {
+		t.Fatal(err)
+	}
+	// A transport failure after some bytes must preserve the previous seed.
+	err := publishRecoverySeed(io.MultiReader(strings.NewReader("partial"), brokenSeedReader{}), final)
+	if err == nil {
+		t.Fatal("partial seed published despite source failure")
+	}
+	data, err := os.ReadFile(final)
+	if err != nil || string(data) != "verified seed" {
+		t.Fatalf("published seed changed after failed copy: %q, %v", data, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("temporary seeds leaked: %v, %v", entries, err)
+	}
+	if err := publishRecoverySeed(strings.NewReader("replacement seed"), final); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(final)
+	if err != nil || string(data) != "replacement seed" {
+		t.Fatalf("replacement not published: %q, %v", data, err)
+	}
+}
+
+type brokenSeedReader struct{}
+
+func (brokenSeedReader) Read([]byte) (int, error) { return 0, errors.New("source read failed") }
 
 type memoryStore struct {
 	v          Volume
