@@ -10,9 +10,11 @@ server, and contents surviving a clean server restart.
 Eight cases passed in three consecutive local runs of the earlier harness, and
 once after its Docker failure checks were added. Digests, image IDs, package
 versions, scope and cleanup evidence are in [smb-protocol.json](smb-protocol.json).
-The separate GitHub Actions workflow can be dispatched manually or triggered by
-an `smb-protocol-ci-*` tag; either requires fresh operator approval. These protocol
-checks make no kernel CIFS, CSI, SQLite, fencing or physical-durability claim.
+The protocol suite also [passed on GitHub at source `3410200`](https://github.com/Pukata/csi-driver-sqlite/actions/runs/42503207412).
+It now runs as the `smb-protocol` job in the shared CI workflow, including when
+that workflow is reused for release validation. Manual dispatches and reruns
+require fresh operator approval. These protocol checks make no kernel CIFS, CSI,
+SQLite, fencing or physical-durability claim.
 
 ## Real NFS recovery
 

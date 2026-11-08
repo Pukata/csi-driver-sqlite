@@ -183,9 +183,10 @@ the fault. Assertions require specific SMB status codes or the explicit
 negotiation-timeout diagnostic; an arbitrary command failure cannot pass.
 
 The old SMB Kubernetes/NAS failure suite and its automatic CI matrix entry were
-removed. The separate SMB protocol workflow runs by manual dispatch or by pushing
-an `smb-protocol-ci-*` tag. Validate locally first and obtain fresh operator
-approval before triggering or rerunning it.
+removed. SMB protocol checks now run as the `smb-protocol` job in the shared
+`.github/workflows/ci.yml`, alongside Go, ownership and Kubernetes checks. Release
+validation reuses that same workflow. Validate locally first and obtain fresh
+operator approval before manually dispatching or rerunning Actions.
 It does not validate kernel CIFS cache/reconnect behavior, CSI ownership, fencing,
 SQLite replication, interrupted file-transfer recovery or physical power-loss
 durability. Those claims require separate tests. Results record the image ID,

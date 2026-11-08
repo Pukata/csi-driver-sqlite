@@ -12,9 +12,9 @@ Run `make integration-test` for Redfish authority changes and `make image benchm
 for resource/digest changes. Keep application migration tooling outside this project.
 Run `make image nas-image nas-test` for changes to NAS fixtures or backend recovery.
 The NAS suite creates its own NFS server and cluster; never substitute an existing NAS.
-SMB protocol tests live separately under `test/protocols/smb`. Validate them
-locally before considering CI. Do not dispatch or rerun GitHub Actions without
-fresh operator approval; Actions cost is an explicit constraint.
+SMB protocol tests live under `test/protocols/smb` and run as the `smb-protocol`
+job in `.github/workflows/ci.yml`. Validate them locally before considering CI.
+Do not dispatch or rerun GitHub Actions without fresh operator approval; Actions cost is an explicit constraint.
 
 For AI-assisted commits, retain the human author and use this repository's
 established attribution trailer exactly:
