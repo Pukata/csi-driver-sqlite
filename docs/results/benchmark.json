@@ -1,0 +1,88 @@
+{
+  "result": "PASS",
+  "runtime": "3.13.18",
+  "kernel": "7.0.0-1017-azure",
+  "architecture": "x86_64",
+  "litestream": "v0.5.18",
+  "driverRevision": "715a9a7c0dda5480a65193b1321596991ad36ed3",
+  "containerLimits": {
+    "cpu": 2,
+    "memoryBytes": 536870912
+  },
+  "backend": "disposable Docker-host directory; no network NAS",
+  "samplesPerSize": 1,
+  "rssSamplingIntervalSeconds": 0.005,
+  "cases": [
+    {
+      "fixtureMiB": 16,
+      "databaseBytes": 18890752,
+      "mainFileBytes": 18882560,
+      "initialReplicaAndRestoreSeconds": 1.3979,
+      "commitToVerifiedRestoreSeconds": 0.92,
+      "digest": {
+        "seconds": 0.2251,
+        "sampledPeakRSSBytes": 19574784
+      },
+      "restore": {
+        "seconds": 0.2047,
+        "sampledPeakRSSBytes": 43962368
+      },
+      "verify": {
+        "seconds": 0.2305,
+        "sampledPeakRSSBytes": 19505152
+      }
+    },
+    {
+      "fixtureMiB": 1,
+      "databaseBytes": 1196032,
+      "mainFileBytes": 4096,
+      "initialReplicaAndRestoreSeconds": 1.0934,
+      "commitToVerifiedRestoreSeconds": 0.9755,
+      "digest": {
+        "seconds": 0.1626,
+        "sampledPeakRSSBytes": 19386368
+      },
+      "restore": {
+        "seconds": 0.0321,
+        "sampledPeakRSSBytes": 40161280
+      },
+      "verify": {
+        "seconds": 0.1627,
+        "sampledPeakRSSBytes": 19406848
+      }
+    },
+    {
+      "fixtureMiB": 64,
+      "databaseBytes": 75534336,
+      "mainFileBytes": 75526144,
+      "initialReplicaAndRestoreSeconds": 3.0049,
+      "commitToVerifiedRestoreSeconds": 2.5749,
+      "digest": {
+        "seconds": 0.4241,
+        "sampledPeakRSSBytes": 19558400
+      },
+      "restore": {
+        "seconds": 0.7963,
+        "sampledPeakRSSBytes": 48177152
+      },
+      "verify": {
+        "seconds": 0.4297,
+        "sampledPeakRSSBytes": 19533824
+      }
+    }
+  ],
+  "publisherMetrics": [
+    {
+      "fixtureMiB": 16,
+      "sampledPeakRSSBytes": 43098112
+    },
+    {
+      "fixtureMiB": 1,
+      "sampledPeakRSSBytes": 42717184
+    },
+    {
+      "fixtureMiB": 64,
+      "sampledPeakRSSBytes": 54546432
+    }
+  ]
+}

@@ -62,4 +62,7 @@ that storage is solved. Start with disposable data and report the exact image,
 backend and reproduction when behavior differs.
 
 This article is a prepared announcement draft. It has not been posted to any
-community. Link a tagged release and its passing CI run when publishing it.
+community. The first reference is [v0.2.0-alpha.1](https://github.com/Pukata/csi-driver-sqlite/releases/tag/v0.2.0-alpha.1),
+tested at source `715a9a7c0dda5480a65193b1321596991ad36ed3` by the
+[passing release workflow](https://github.com/Pukata/csi-driver-sqlite/actions/runs/42457082286).
+See the [recorded assertions and measurements](results/README.md).

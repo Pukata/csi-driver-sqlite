@@ -100,6 +100,8 @@ is exercised in CI on the versions listed in [the test guide](docs/testing.md).
 
 ## Start here
 
+- [Experimental release v0.2.0-alpha.1](https://github.com/Pukata/csi-driver-sqlite/releases/tag/v0.2.0-alpha.1)
+  and [recorded testcase results](docs/results/README.md).
 - [Gatus: one database PVC and an executable compatibility testcase](docs/gatus.md).
 - [Homebox: database and attachment storage layout](docs/homebox.md).
 - [Alternatives and when this driver does not fit](docs/alternatives.md).
@@ -110,8 +112,8 @@ is exercised in CI on the versions listed in [the test guide](docs/testing.md).
 
 ## Install from source
 
-There is no published release image or hosted chart repository yet. Build and
-push an image to your own registry:
+For versioned images and the OCI chart, see [release installation](docs/releases.md).
+To build your own development image instead:
 
 ```sh
 docker build -t your-registry/sqlite-csi:dev .

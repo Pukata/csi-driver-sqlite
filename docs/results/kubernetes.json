@@ -1,0 +1,70 @@
+{
+  "source": "715a9a7c0dda5480a65193b1321596991ad36ed3",
+  "workflow": "https://github.com/Pukata/csi-driver-sqlite/actions/runs/42457082286",
+  "createdAt": "2026-11-08T07:01:47Z",
+  "result": "PASS",
+  "kubernetes": [
+    {
+      "kubernetes": "1.35.8",
+      "result": "PASS",
+      "assertions": [
+        "initial writer and real CSI mount ready",
+        "all baseline commits restored from shared replica",
+        "second writer blocked by ReadWriteOncePod",
+        "controller rescheduled away from partitioned writer",
+        "denied fencing blocks ownership release",
+        "partitioned writer still commits and publishes while fence is denied",
+        "independent fence actually terminates old worker",
+        "missing replica leaves fenced owner locked",
+        "replacement writer ready on other worker",
+        "recovered data replicated into separate history",
+        "old worker returns Ready under quarantine",
+        "old application container is gone",
+        "returning node agent Ready",
+        "returning worker has no stale publisher",
+        "active replica progresses after stale worker returns",
+        "clean handover onto returned worker",
+        "clean rejoin preserves records in a fresh restore",
+        "Gatus real application Ready on source node",
+        "Gatus writes real monitoring history to SQLite",
+        "Gatus history verified in a fresh Litestream restore",
+        "Gatus clean handover to other node",
+        "Gatus retains original history and records new checks after move",
+        "Gatus preserved history survives another fresh replica restore"
+      ],
+      "gatusPreservedRows": 4,
+      "gatusPatchToReadyAndVerifiedHistorySeconds": 18.409
+    },
+    {
+      "kubernetes": "1.36.4",
+      "result": "PASS",
+      "assertions": [
+        "initial writer and real CSI mount ready",
+        "all baseline commits restored from shared replica",
+        "second writer blocked by ReadWriteOncePod",
+        "controller rescheduled away from partitioned writer",
+        "denied fencing blocks ownership release",
+        "partitioned writer still commits and publishes while fence is denied",
+        "independent fence actually terminates old worker",
+        "missing replica leaves fenced owner locked",
+        "replacement writer ready on other worker",
+        "recovered data replicated into separate history",
+        "old worker returns Ready under quarantine",
+        "old application container is gone",
+        "returning node agent Ready",
+        "returning worker has no stale publisher",
+        "active replica progresses after stale worker returns",
+        "clean handover onto returned worker",
+        "clean rejoin preserves records in a fresh restore",
+        "Gatus real application Ready on source node",
+        "Gatus writes real monitoring history to SQLite",
+        "Gatus history verified in a fresh Litestream restore",
+        "Gatus clean handover to other node",
+        "Gatus retains original history and records new checks after move",
+        "Gatus preserved history survives another fresh replica restore"
+      ],
+      "gatusPreservedRows": 3,
+      "gatusPatchToReadyAndVerifiedHistorySeconds": 10.154
+    }
+  ]
+}

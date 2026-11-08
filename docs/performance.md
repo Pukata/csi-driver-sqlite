@@ -37,6 +37,6 @@ active writable database, sharing its 512Mi memory limit. Size and measure that
 limit for your actual apps. Append-only publisher logs and retained histories also
 consume disk; monitor them and manage retention before adopting many volumes.
 
-Validated result snapshots and their exact CI source revision are stored under
-`docs/results/` when available. Re-run the test rather than assuming a previous
+Validated [result snapshots](results/README.md) include their exact CI source
+revision and workflow link. Re-run the test rather than assuming a previous
 runner's numbers predict your storage backend.

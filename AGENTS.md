@@ -8,6 +8,8 @@ Use `gofmt`. Run `make verify test build chart` for relevant code/chart changes.
 Run `make image e2e` when changing storage ownership, restore, mounts or recovery.
 The end-to-end harness creates its own kind cluster and kubeconfig; never point
 fault injection at an existing cluster. Keep test credentials out of Git.
+Run `make integration-test` for Redfish authority changes and `make image benchmark`
+for resource/digest changes. Keep application migration tooling outside this project.
 
 For AI-assisted commits, retain the human author and add a `Co-authored-by`
 trailer identifying the AI tool and model when independently confirmed. Do not
