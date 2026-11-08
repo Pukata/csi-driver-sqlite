@@ -47,11 +47,8 @@ func (n *Node) work(s *Session) string {
 	return filepath.Join(n.base(s.ID), fmt.Sprintf("epoch-%d", s.Epoch))
 }
 func (n *Node) database(s *Session) string { return filepath.Join(n.work(s), s.Database) }
-func (n *Node) replica(id, directory string) string {
-	if directory == "" {
-		directory = "replica"
-	}
-	return filepath.Join(n.backing, id, directory)
+func (n *Node) replica(id string) string {
+	return filepath.Join(n.backing, id, "replica")
 }
 func ownDir(path string) error {
 	if e := os.MkdirAll(path, 0770); e != nil {
@@ -122,7 +119,7 @@ func (n *Node) start(s *Session) error {
 		}
 	}
 	path := filepath.Join(n.base(s.ID), "litestream.json")
-	config := map[string]any{"dbs": []any{map[string]any{"path": n.database(s), "replica": map[string]any{"path": n.replica(s.ID, s.ReplicaDirectory)}}}}
+	config := map[string]any{"dbs": []any{map[string]any{"path": n.database(s), "replica": map[string]any{"path": n.replica(s.ID)}}}}
 	if e := writeJSON(path, config); e != nil {
 		return e
 	}
@@ -185,10 +182,7 @@ func digest(ctx context.Context, path string) (string, error) {
 	out, e := run(ctx, "python3", "-c", digestProgram, path)
 	return strings.TrimSpace(string(out)), e
 }
-func (n *Node) restore(ctx context.Context, id, directory, path string) error {
-	if e := checkReplicaDirectory(directory); e != nil {
-		return e
-	}
+func (n *Node) restore(ctx context.Context, id, path string) error {
 	tmp, e := os.MkdirTemp(filepath.Dir(path), ".restore-")
 	if e != nil {
 		return e
@@ -198,7 +192,7 @@ func (n *Node) restore(ctx context.Context, id, directory, path string) error {
 		return e
 	}
 	staged := filepath.Join(tmp, "database.db")
-	if _, e = run(ctx, "litestream", "restore", "-o", staged, "file://"+n.replica(id, directory)); e != nil {
+	if _, e = run(ctx, "litestream", "restore", "-o", staged, "file://"+n.replica(id)); e != nil {
 		return e
 	}
 	if _, e = digest(ctx, staged); e != nil {
@@ -243,7 +237,7 @@ func (n *Node) flush(ctx context.Context, s *Session) (bool, error) {
 		return false, e
 	}
 	path := filepath.Join(scratch, "check.db")
-	if e = n.restore(ctx, s.ID, s.ReplicaDirectory, path); e != nil {
+	if e = n.restore(ctx, s.ID, path); e != nil {
 		return false, e
 	}
 	got, e := digest(ctx, path)
@@ -301,7 +295,7 @@ func (n *Node) NodePublishVolume(ctx context.Context, r *csi.NodePublishVolumeRe
 		if e = ownDir(n.base(v.ID)); e != nil {
 			return nil, e
 		}
-		s = &Session{ID: v.ID, Epoch: epoch, Database: v.Database, ReadOnly: r.Readonly, Targets: map[string]bool{}, ReplicaDirectory: "replica"}
+		s = &Session{ID: v.ID, Epoch: epoch, Database: v.Database, ReadOnly: r.Readonly, Targets: map[string]bool{}}
 		n.sessions[v.ID] = s
 		if e = n.save(s); e != nil {
 			return nil, e
@@ -328,7 +322,7 @@ func (n *Node) NodePublishVolume(ctx context.Context, r *csi.NodePublishVolumeRe
 			return nil, e
 		}
 		if v.Initialized && !exists(n.database(s)) {
-			e = n.restore(ctx, v.ID, s.ReplicaDirectory, n.database(s))
+			e = n.restore(ctx, v.ID, n.database(s))
 			if e != nil {
 				return nil, e
 			}

@@ -12,12 +12,13 @@ from run import NasSuite
 class FaultTargetTests(unittest.TestCase):
     def fixture(self):
         fixture = object.__new__(NasSuite)
-        fixture.name, fixture.nas_id, fixture.network_id = 'owned-test', 'expected-id', 'test-network'
+        fixture.name, fixture.nas_id = 'owned-test', 'expected-id'
+        fixture.paused = False
         machine = {'Id':'expected-id','Config':{'Labels':{'sqlite-csi.nas-test':'owned-test'}},
-                   'HostConfig':{'RestartPolicy':{'Name':'no'}},'NetworkSettings':{'Networks':{}}}
+                   'HostConfig':{'RestartPolicy':{'Name':'no'}},'State':{'Running':True,'Paused':False}}
         return fixture, machine
 
-    def test_disconnect_never_mutates_an_unowned_or_restartable_machine(self):
+    def test_pause_never_mutates_an_unowned_or_restartable_machine(self):
         for fault in ('id','label','restart'):
             with self.subTest(fault=fault):
                 fixture, machine = self.fixture()
@@ -25,9 +26,34 @@ class FaultTargetTests(unittest.TestCase):
                 if fault=='label': machine['Config']['Labels']['sqlite-csi.nas-test']='other-run'
                 if fault=='restart': machine['HostConfig']['RestartPolicy']['Name']='always'
                 fixture.run = Mock(return_value=json.dumps([machine]))
-                with self.assertRaises(AssertionError): fixture.disconnect_nas()
+                with self.assertRaises(AssertionError): fixture.pause_nas()
                 self.assertEqual(fixture.run.call_args_list[0].args,('docker','inspect','expected-id'))
                 self.assertEqual(fixture.run.call_count,1,'Fault injection escaped ownership validation')
+
+    def test_pause_and_restore_target_owned_container_and_reset_state(self):
+        fixture, machine = self.fixture()
+        def run(*args):
+            if args == ('docker','inspect','expected-id'):
+                return json.dumps([machine])
+            if args == ('docker','pause','expected-id'):
+                machine['State']['Paused'] = True
+            elif args == ('docker','unpause','expected-id'):
+                machine['State']['Paused'] = False
+            else:
+                self.fail('Unexpected Docker command: '+repr(args))
+        fixture.run = Mock(side_effect=run)
+        fixture.pause_nas()
+        self.assertTrue(fixture.paused)
+        fixture.restore_nas()
+        self.assertFalse(fixture.paused)
+        self.assertFalse(machine['State']['Paused'])
+        self.assertEqual([call.args for call in fixture.run.call_args_list], [
+            ('docker','inspect','expected-id'), ('docker','pause','expected-id'),
+            ('docker','inspect','expected-id'), ('docker','inspect','expected-id'),
+            ('docker','unpause','expected-id')])
+        fixture.run.reset_mock()
+        fixture.restore_nas()
+        self.assertEqual([call.args for call in fixture.run.call_args_list], [('docker','inspect','expected-id')])
 
     def test_cleanup_never_removes_an_unowned_machine(self):
         fixture, machine = self.fixture()

@@ -10,15 +10,6 @@ import run as e2e
 
 
 class Maintenance(e2e.Suite):
-    def node_agent(self, node):
-        return next((p for p in self.pods('sqlite-csi-system', 'app=sqlite-csi-node')
-                     if p['spec']['nodeName'] == node and self.ready(p)), None)
-
-    def restart(self, pod, finder, description):
-        uid = pod['metadata']['uid']
-        self.k('delete', 'pod', pod['metadata']['name'], '-n', 'sqlite-csi-system', '--wait=false')
-        return self.wait(description, lambda: (p := finder()) and p['metadata']['uid'] != uid and p, 300)
-
     def exercise(self, target_image):
         app = self.app()
         source = app['spec']['nodeName']
@@ -29,20 +20,6 @@ class Maintenance(e2e.Suite):
         expected = ['before-maintenance']
         self.request(app, expected[0])
         self.wait('baseline fresh restore', lambda: self.replica_records() == expected)
-        # Write immediately before deleting each driver pod; restore verifies publication
-        # eventually resumes, including the commit made during the rollout window.
-        for component in ('controller', 'node'):
-            marker = 'before-restart-' + component
-            self.request(app, marker)
-            expected.append(marker)
-            if component == 'controller':
-                self.restart(self.controller(), self.controller, 'controller restarted during replication')
-            else:
-                self.restart(self.node_agent(source), lambda: self.node_agent(source), 'node agent restarted during replication')
-            assert self.volume()['owner'] == source and self.volume()['epoch'] == before['epoch']
-            assert [r[1] for r in self.request(app)['records']] == expected
-            self.wait(component + ' restart preserves a fresh restore', lambda: self.replica_records() == expected)
-
         self.run('kind', 'load', 'docker-image', target_image, '--name', self.name, timeout=360)
         self.run('helm', 'upgrade', 'sqlite-csi', str(REPO / 'charts/sqlite-csi'),
                  '--kubeconfig', str(self.kubeconfig), '--kube-context', 'kind-' + self.name,
@@ -92,7 +69,7 @@ def main():
         suite.close()
     if error:
         raise SystemExit(1)
-    print('PASS maintenance scenarios; artifacts at ' + str(suite.artifacts), flush=True)
+    print('PASS upgrade scenario; artifacts at ' + str(suite.artifacts), flush=True)
 
 
 if __name__ == '__main__':

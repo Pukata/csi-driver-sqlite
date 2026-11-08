@@ -30,7 +30,7 @@ class NasSuite(Suite):
         self.nas_image = nas_image
         self.nas_id = None
         self.nas_ip = None
-        self.disconnected = False
+        self.paused = False
 
     def node_mounts(self):
         return []  # There must be no host-directory bypass around NFS.
@@ -130,18 +130,18 @@ class NasSuite(Suite):
         self.k('delete','deployment','sqlite-test','-n','sqlite-test','--wait=true')
         self.k('delete','pvc','sqlite-test','-n','sqlite-test','--wait=true')
 
-    def disconnect_nas(self):
+    def pause_nas(self):
         self.nas()
-        self.run('docker','network','disconnect',self.network_id,self.nas_id)
-        self.disconnected = True
-        assert self.name not in self.nas()['NetworkSettings']['Networks']
+        self.run('docker','pause',self.nas_id)
+        self.paused = True
+        assert self.nas()['State']['Paused']
 
     def restore_nas(self):
         if not self.nas_id: return
         machine = self.nas()
-        if self.disconnected:
-            self.run('docker','network','connect','--ip',self.nas_ip,self.network_id,self.nas_id)
-            self.disconnected = False
+        if self.paused:
+            self.run('docker','unpause',self.nas_id)
+            self.paused = False
         if not machine['State']['Running']:
             self.run('docker','start',self.nas_id)
 
@@ -270,7 +270,7 @@ def cases(s):
 
         def test_20_nas_outage_blocks_clean_move_then_recovers(self):
             before = s.volume()
-            s.disconnect_nas()
+            s.pause_nas()
             s.request(self.original,'local-write-during-nas-outage')
             self.expected.append('local-write-during-nas-outage')
             self.assertEqual([r[1] for r in s.request(self.original)['records']],self.expected)
@@ -279,7 +279,7 @@ def cases(s):
             agent = next(p for p in s.pods('sqlite-csi-system','app=sqlite-csi-node')
                          if p['spec']['nodeName']==self.original['spec']['nodeName'])
             script = "import json;print(json.dumps(json.load(open('/var/lib/sqlite-csi/"+s.volume_id+"/session.json'))['targets']))"
-            s.wait('clean unpublish attempted while NAS is disconnected',lambda:s.k('exec','-n','sqlite-csi-system',
+            s.wait('clean unpublish attempted while NAS is paused',lambda:s.k('exec','-n','sqlite-csi-system',
                 agent['metadata']['name'],'-c','driver','--','python3','-c',script)=='{}')
             s.observe_locked(before,self.original['metadata']['uid'])
             s.restore_nas()

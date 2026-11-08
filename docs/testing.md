@@ -13,7 +13,7 @@ may describe features and cases that have since been removed.
 |---|---|---|
 | Unit | Ownership/epoch rules, guarded state transitions, dirty-release and legacy-state refusal | Go matrix, every PR/push |
 | Component/integration | Volume diagnosis, backup restore, fault-target ownership guards, real SQLite/Litestream correctness/resource tests | Fast checks and one resource job |
-| Cluster end-to-end | Kubernetes scheduling, CSI mounts, clean movement, restart/upgrade, Gatus compatibility | Two Kubernetes versions |
+| Cluster end-to-end | Kubernetes scheduling, CSI mounts, clean movement, driver restarts, Gatus compatibility; baseline upgrade on manual/release runs | Two Kubernetes versions |
 | NAS integration/end-to-end | Real NFS CSI provisioning/mounts and NAS fault boundaries | One pinned Kubernetes version |
 
 Keep policy combinations in unit tests. The expensive suites cover crossings
@@ -39,7 +39,8 @@ A compile or setup error does not count as detecting a mutation.
 
 `make image e2e` builds the runtime image and starts a uniquely named kind
 cluster with one control-plane node and two workers. CI pins Kubernetes 1.35.8
-and 1.36.4 node images by digest. The same Python harness can run locally with
+and 1.36.4 node images by digest. The workflow builds the current driver image once and shares it across cluster jobs.
+The same Python harness can run locally with
 Docker, kind, Helm and kubectl installed.
 
 Each run owns a separate Docker network, kubeconfig and workspace. The harness
@@ -51,6 +52,7 @@ The scenarios exercise:
 
 - Dynamic PVC provisioning and real CSI node registration and mounts.
 - Rejection of a second writer with `ReadWriteOncePod`.
+- Controller and node-agent restarts during replication, retaining owner, epoch, records, integrity and a fresh replica restore.
 - Integrity and a fresh replica restore of committed test records.
 - A planned move to another worker after Kubernetes stops the old Pod.
 - Preservation of the PV identity and all baseline records, with epoch advancement.
@@ -58,6 +60,7 @@ The scenarios exercise:
 - The real pinned Gatus example: successful monitoring rows, fresh replica
   restore, clean movement to another worker and preserved history plus new checks.
 
+CI runs Python fixture tests once, in the Go 1.27 job.
 `make integration-test` exercises the read-only volume diagnostic and an isolated
 SQLite online-backup restore, plus fast NAS fault-target ownership guards.
 `make benchmark` runs three database correctness/resource
@@ -68,13 +71,12 @@ Artifacts include a JSON scenario summary, Kubernetes events and pod/driver
 logs. Kubeconfigs are excluded from artifacts.
 Failures must be diagnosed rather than bypassed by forcing volume ownership.
 
-## Upgrade and restart exercise
+## Upgrade exercise
 
-On Kubernetes 1.36.4, CI builds the pinned `v0.2.0-alpha.1` baseline
-(commit `94832bcf35f0cb3159e9f7e51b9efad590c7c993`) and the current image,
-then upgrades an existing volume in an isolated kind cluster. It restarts driver
-pods during replication; ownership, records, integrity and fresh replica restores
-are checked before and after the upgrade.
+On manual and release runs, CI builds the pinned `v0.2.0-alpha.1` baseline
+(commit `94832bcf35f0cb3159e9f7e51b9efad590c7c993`) and reuses the current image built for the workflow, then upgrades an existing
+volume in an isolated Kubernetes 1.36.4 kind cluster. Ownership, records,
+integrity and fresh replica restores are checked across the upgrade.
 This exercises that baseline-to-current transition on the shared-directory
 backend, not arbitrary versions, physical hosts or NAS failure semantics.
 
@@ -107,7 +109,7 @@ actual database records through a fresh Litestream restore, not just Pod readine
 | Case | Required outcome |
 |---|---|
 | NAS process killed and restarted with its data | Published records survive and replication resumes |
-| NAS disconnected during planned movement | Local commits still work; an observed unpublish cannot release ownership without verification; reconnect permits the move and preserves those commits |
+| NAS container paused during planned movement | Local commits still work; an observed unpublish cannot release ownership without verification; unpausing permits the move and preserves those commits |
 | Replica path obstructed | A write through the mounted share fails; unpublish remains locked until the original history is restored, then a clean handover retains local commits |
 
 The outage and write-failure cases commit locally before requesting movement.
@@ -176,9 +178,9 @@ the fault. Assertions require specific SMB status codes or the explicit
 negotiation-timeout diagnostic; an arbitrary command failure cannot pass.
 
 The old SMB Kubernetes/NAS failure suite and its automatic CI matrix entry were
-removed. SMB protocol checks now run as the `smb-protocol` job in the shared
-`.github/workflows/ci.yml`, alongside Go, ownership and Kubernetes checks. Release
-validation reuses that same workflow. Validate locally first and obtain fresh
+removed. SMB protocol checks run as the `smb-protocol` job in the shared
+`.github/workflows/ci.yml` when relevant paths change in routine CI, and always
+on manual and release runs. Release validation reuses that same workflow. Validate locally first and obtain fresh
 operator approval before manually dispatching or rerunning Actions.
 It does not validate kernel CIFS cache/reconnect behavior, CSI ownership, node-loss recovery,
 SQLite replication, interrupted file-transfer recovery or physical power-loss

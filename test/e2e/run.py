@@ -176,6 +176,15 @@ with tempfile.TemporaryDirectory() as d:
         self.wait('initial writer and real CSI mount ready',self.app)
         self.k('uncordon',self.workers[1])
 
+    def node_agent(self, node):
+        return next((p for p in self.pods('sqlite-csi-system', 'app=sqlite-csi-node')
+                     if p['spec']['nodeName'] == node and self.ready(p)), None)
+
+    def restart(self, pod, finder, description):
+        uid = pod['metadata']['uid']
+        self.k('delete', 'pod', pod['metadata']['name'], '-n', 'sqlite-csi-system', '--wait=false')
+        return self.wait(description, lambda: (p := finder()) and p['metadata']['uid'] != uid and p, 300)
+
     def scenarios(self):
         source_pod = self.app()
         source = source_pod['spec']['nodeName']
@@ -189,6 +198,19 @@ with tempfile.TemporaryDirectory() as d:
         for marker in expected:
             self.request(source_pod,marker)
         self.wait('all baseline commits restored from shared replica',lambda:self.replica_records()==expected)
+        # Verify replication resumes after each driver restart, including a recent commit.
+        for component in ('controller', 'node'):
+            marker = 'before-restart-' + component
+            self.request(source_pod, marker)
+            expected.append(marker)
+            if component == 'controller':
+                self.restart(self.controller(), self.controller, 'controller restarted during replication')
+            else:
+                self.restart(self.node_agent(source), lambda: self.node_agent(source), 'node agent restarted during replication')
+            assert self.volume()['owner'] == source and self.volume()['epoch'] == before['epoch']
+            assert [r[1] for r in self.request(source_pod)['records']] == expected
+            assert self.request(source_pod, path='/integrity')['integrity'] == ['ok']
+            self.wait(component + ' restart preserves a fresh restore', lambda: self.replica_records() == expected)
         second_spec = json.loads(json.dumps(source_pod['spec']))
         second_spec.pop('nodeName',None)
         self.apply({'apiVersion':'v1','kind':'Pod','metadata':{'name':'second-writer','namespace':'sqlite-test'},'spec':second_spec})
