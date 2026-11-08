@@ -13,11 +13,10 @@ for resource/digest changes. Keep application migration tooling outside this pro
 Run `make image nas-image nas-test` for changes to NAS fixtures or backend recovery.
 The NAS suite creates its own NFS server and cluster; never substitute an existing NAS.
 
-For AI-assisted commits, retain the human author and add a `Co-authored-by`
-trailer identifying the AI tool and model when independently confirmed. Do not
-invent a model identity or an official attribution mailbox. If the runtime model
-is unverified, identify only the tool, for example
-`Co-authored-by: Codex (AI assistance) <ai-assistance@example.invalid>`.
-The reserved invalid address records assistance without claiming an OpenAI account.
+For AI-assisted commits, retain the human author and use this repository's
+established attribution trailer exactly:
+`Co-authored-by: GPT-6.1 Sol (via Codex) <noreply@openai.com>`.
+Keep this convention unless the user requests a change. The trailer records the
+user-requested project attribution, not independent review or mailbox ownership.
 Use a GitHub noreply address for the human identity and do not include personal
-email addresses. Attribution records assistance, not independent review.
+email addresses.
