@@ -83,8 +83,8 @@ jobs:
           docker buildx imagetools inspect "$image" > dist/image-manifest.txt
           docker buildx imagetools inspect "$fence" > dist/fencing-image-manifest.txt
           printf '%s\n' "$GITHUB_SHA" > dist/source-revision.txt
-          (cd dist && sha256sum *.tgz *manifest.txt source-revision.txt > SHA256SUMS)
+          (cd dist && sha256sum ./*.tgz ./*manifest.txt ./source-revision.txt > SHA256SUMS)
           cp docs/release-notes.md dist/notes.md
-          printf '\nVersion: %s\nSource: %s\n\nImage: `%s`\n\nChart: `oci://ghcr.io/%s/charts/sqlite-csi`\n\nArchitecture: linux/amd64. Experimental; asynchronous replication can lose unpublished writes.\n' "$VERSION" "$GITHUB_SHA" "$image" "$namespace" >> dist/notes.md
+          printf '\nVersion: %s\nSource: %s\n\nImage: %s\n\nChart: oci://ghcr.io/%s/charts/sqlite-csi\n\nArchitecture: linux/amd64. Experimental; asynchronous replication can lose unpublished writes.\n' "$VERSION" "$GITHUB_SHA" "$image" "$namespace" >> dist/notes.md
           gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$VERSION" -f "sha=$GITHUB_SHA" > /dev/null
           gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --title "$VERSION (experimental)" --notes-file dist/notes.md dist/*.tgz dist/SHA256SUMS dist/*manifest.txt dist/source-revision.txt
