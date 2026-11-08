@@ -1,0 +1,45 @@
+{
+    "source":  "a755090fb2a637df2631cc0a47d773408090aaa3",
+    "workflow":  "https://github.com/Pukata/csi-driver-sqlite/actions/runs/42463780493",
+    "result":  "PASS",
+    "topology":  {
+                     "backend":  "NFSv4.1",
+                     "csiDriver":  "nfs.csi.k8s.io",
+                     "chartVersion":  "4.13.5",
+                     "chartSHA256":  "aace8754451ecbd87e090ec29e6cbffcf88dbd9980cecb165da8b9d0880f7fac",
+                     "kubernetesNodes":  3,
+                     "separateNas":  true,
+                     "workerHostDirectoryBypass":  false,
+                     "mountOptions":  [
+                                          "nfsvers=4.1",
+                                          "hard",
+                                          "timeo=10",
+                                          "retrans=2",
+                                          "actimeo=0"
+                                      ],
+                     "nasPackages":  "nfs-ganesha\t6.5-5\nnfs-ganesha-vfs\t6.5-5"
+                 },
+    "tests":  [
+                  {
+                      "name":  "__main__.cases.\u003clocals\u003e.NasTests.test_10_nas_restart_preserves_replica",
+                      "seconds":  33.253,
+                      "failure":  null
+                  },
+                  {
+                      "name":  "__main__.cases.\u003clocals\u003e.NasTests.test_20_nas_outage_blocks_clean_move_then_recovers",
+                      "seconds":  41.966,
+                      "failure":  null
+                  },
+                  {
+                      "name":  "__main__.cases.\u003clocals\u003e.NasTests.test_30_worker_failure_with_nas_available",
+                      "seconds":  122.008,
+                      "failure":  null
+                  },
+                  {
+                      "name":  "__main__.cases.\u003clocals\u003e.NasTests.test_40_worker_failure_with_nas_unavailable",
+                      "seconds":  103.132,
+                      "failure":  null
+                  }
+              ],
+    "timingScope":  "Whole testcases, including setup and cleanup; not failover latency guarantees."
+}
