@@ -3,12 +3,24 @@
 [![CI](https://github.com/Pukata/csi-driver-sqlite/actions/workflows/ci.yml/badge.svg)](https://github.com/Pukata/csi-driver-sqlite/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Let one replica of your self-hosted SQLite app move between Kubernetes nodes.**
+**Let your self-hosted SQLite apps move between nodes in your Kubernetes homelab.**
+
+You start with a few self-hosted apps. SQLite keeps them easy to run: one app
+instance, a database file, and no separate database service to maintain. Then
+you add another machine and start learning Kubernetes.
+
+Now you want to reboot a worker for maintenance. Kubernetes can start the app
+on another node, but a local PVC keeps its database tied to the original machine.
+
+`csi-driver-sqlite` gives that single app instance a database PVC that can move
+with it. Keep local-disk SQLite writes, use the NAS you already own for replicas,
+and practise moving your apps without copying database files by hand. Your app
+keeps its normal SQLite path; replication runs in the driver.
 
 The app writes to local disk. [Litestream](https://litestream.io/) streams a
 replica to your existing NAS. For a planned move, Kubernetes stops the old Pod,
 the driver verifies the final replica, and the next node restores it before
-starting the app. Your app uses a normal PVC and its usual SQLite path.
+starting the app.
 
 **Node-loss recovery is manual.** An unreachable node keeps ownership; a
 replacement waits rather than starting a second writer. Replication is
