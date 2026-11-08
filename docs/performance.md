@@ -2,7 +2,7 @@
 
 `make image benchmark` runs the shipped Litestream version and the exact digest
 program extracted from `node.go`. It uses a disposable, network-disabled container
-with 2 CPU and 512 MiB limits and a 1 GiB temporary filesystem. It never opens an
+with 2 CPU and 512 MiB limits and a disposable host-disk directory. It never opens an
 existing database. The generated JSON is uploaded with the Kubernetes CI artifacts.
 
 Each of the 1, 16 and 64 MiB deterministic fixtures is a testcase, with assertions:
@@ -24,7 +24,7 @@ container. A single large BLOB still makes a large SQL dump row: streaming the d
 avoids joining the entire database into memory, not all allocations.
 
 These are measurements of one sample per size on the recorded runtime/kernel,
-with a local temporary filesystem. They are not NAS numbers, a latency SLA,
+with a local host filesystem. They are not NAS numbers, a latency SLA,
 whole-cluster memory measurements, or end-to-end Kubernetes failover times. The
 kind tests establish behavior under node faults separately. Restore and integrity
 verification cost grows with database size; unrelated volume operations currently

@@ -31,5 +31,6 @@ integration-test:
 	python3 -m unittest discover -s integrations/redfish -p 'test_*.py' -v
 
 benchmark:
-	mkdir -p .e2e/artifacts
-	docker run --rm --network=none --read-only --user=1000:1000 --memory=512m --cpus=2 --tmpfs /tmp:rw,size=1g,mode=1777 -e DRIVER_REVISION=$$(git rev-parse HEAD) -v "$$(pwd):/src:ro" --entrypoint python3 $(IMAGE) /src/test/bench/run.py > .e2e/artifacts/benchmark.json
+	mkdir -p .e2e/artifacts .e2e/bench-work
+	chmod 0777 .e2e/bench-work
+	docker run --rm --network=none --read-only --user=1000:1000 --memory=512m --cpus=2 -e TMPDIR=/work -e DRIVER_REVISION=$$(git rev-parse HEAD) -v "$$(pwd)/.e2e/bench-work:/work" -v "$$(pwd):/src:ro" --entrypoint python3 $(IMAGE) /src/test/bench/run.py > .e2e/artifacts/benchmark.json

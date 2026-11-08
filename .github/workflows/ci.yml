@@ -34,7 +34,7 @@ jobs:
       - run: make integration-test
       - name: Lint workflow
         if: matrix.go == '1.27.x'
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
       - name: Check dependency vulnerabilities
         if: matrix.go == '1.27.x'
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 
@@ -73,7 +74,7 @@ def test_case(size_mib, digest_program):
                         result = subprocess.run(['litestream','restore','-o',str(target),'file://'+str(root/'replica')],
                                                 capture_output=True,timeout=30)
                         if result.returncode == 0:
-                            with sqlite3.connect(target) as restored:
+                            with closing(sqlite3.connect(target)) as restored:
                                 if restored.execute('select count(*) from chunks').fetchone()[0] == count:
                                     assert restored.execute('pragma integrity_check').fetchone()[0]=='ok'
                                     return round(time.monotonic()-started,4)
@@ -95,9 +96,12 @@ def test_case(size_mib, digest_program):
                     # Preserve the digest format used by existing recovery seed metadata.
                     expected = hashlib.sha256('\n'.join(connection.iterdump()).encode()).hexdigest()
                     assert original == expected, 'Streaming digest changed the existing format'
-                assert digest['sampledPeakRSSBytes'] < 384*1024*1024, 'Digest exceeded regression memory budget'
-                assert verify['sampledPeakRSSBytes'] < 384*1024*1024, 'Restore verification exceeded memory budget'
-                return {'fixtureMiB':size_mib,'databaseBytes':db.stat().st_size,
+                assert 0 < digest['sampledPeakRSSBytes'] < 384*1024*1024, 'Missing digest sample or regression memory budget exceeded'
+                assert 0 < verify['sampledPeakRSSBytes'] < 384*1024*1024, 'Missing verification sample or memory budget exceeded'
+                assert publisher_peak[0] > 0, 'Publisher RSS was not sampled'
+                logical_bytes = connection.execute('pragma page_count').fetchone()[0]*connection.execute('pragma page_size').fetchone()[0]
+                assert logical_bytes >= size_mib*1024*1024, 'Fixture did not reach the intended size'
+                return {'fixtureMiB':size_mib,'databaseBytes':logical_bytes,'mainFileBytes':db.stat().st_size,
                         'initialReplicaAndRestoreSeconds':initial,
                         'commitToVerifiedRestoreSeconds':lag,'digest':digest,'restore':restore,'verify':verify}
             finally:
@@ -121,7 +125,7 @@ if __name__ == '__main__':
     print(json.dumps({'result':'PASS','runtime':platform.python_version(),'kernel':platform.release(),
           'architecture':platform.machine(),'litestream':subprocess.check_output(['litestream','version'],text=True).strip(),
           'driverRevision':os.environ.get('DRIVER_REVISION','unknown'),
-          'containerLimits':{'cpu':2,'memoryBytes':512*1024*1024,'temporaryFilesystemBytes':1024*1024*1024},
-          'backend':'same-container temporary local filesystem; no network NAS',
+          'containerLimits':{'cpu':2,'memoryBytes':512*1024*1024},
+          'backend':'disposable Docker-host directory; no network NAS',
           'samplesPerSize':1,'rssSamplingIntervalSeconds':0.005,'cases':cases,
           'publisherMetrics':publisher_metrics},indent=2))
