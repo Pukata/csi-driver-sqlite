@@ -20,7 +20,11 @@ build:
 
 chart:
 	helm lint --strict charts/sqlite-csi
-	helm lint --strict charts/sqlite-csi --set failover.enabled=true --set failover.configSecret=test-fencing
+	@if output=$$(helm template sqlite-csi charts/sqlite-csi --set failover.enabled=true 2>&1); then \
+		echo "obsolete failover configuration was accepted"; exit 1; \
+	else \
+		echo "$$output" | grep -q 'automatic failover was removed'; \
+	fi
 
 image:
 	docker build -t $(IMAGE) .
@@ -37,7 +41,6 @@ maintenance-test:
 
 integration-test:
 	python3 -m unittest discover -s tools -p 'test_*.py' -v
-	python3 -m unittest discover -s integrations/redfish -p 'test_*.py' -v
 	python3 -m unittest discover -s test/nas -p 'test_*.py' -v
 
 nas-image:

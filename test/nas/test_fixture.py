@@ -41,11 +41,11 @@ class FaultTargetTests(unittest.TestCase):
         fixture.volume_id = 'v-'+'a'*32
         machine['Config']['Labels'] = {}
         fixture.run = Mock(return_value=json.dumps([machine]))
-        with self.assertRaises(AssertionError): fixture.replica_fault('corrupt')
+        with self.assertRaises(AssertionError): fixture.replica_fault('block-write')
         self.assertEqual(fixture.run.call_count,1)
         fixture.nas = Mock()
         fixture.volume_id = '../outside'
-        with self.assertRaises(AssertionError): fixture.replica_fault('corrupt')
+        with self.assertRaises(AssertionError): fixture.replica_fault('block-write')
         self.assertEqual(fixture.run.call_count,1)
 
     def test_live_write_fault_uses_only_owned_publisher_protocol_mount(self):
@@ -55,7 +55,7 @@ class FaultTargetTests(unittest.TestCase):
         fixture.workers = ['owned-worker']
         fixture.k = Mock()
         client = {'metadata': {'name': 'publisher'}, 'spec': {'nodeName': 'owned-worker'}}
-        for action in ('corrupt', 'incomplete', 'block-write', 'repair'):
+        for action in ('block-write', 'repair'):
             fixture.replica_fault(action, client)
             args = fixture.k.call_args.args
             self.assertEqual(args[:8], ('exec', '-n', 'sqlite-csi-system', 'publisher', '-c', 'driver', '--', 'python3'))
@@ -82,14 +82,11 @@ class FaultTargetTests(unittest.TestCase):
                 script = args[args.index('-c')+1].replace("Path('/replicas')", 'Path('+repr(root)+')')
                 subprocess.run(['python3','-c',script,args[-2],args[-1]],check=True,capture_output=True)
             fixture.run = run
-            for fault in ('corrupt','incomplete','block-write'):
-                fixture.replica_fault(fault)
-                self.assertEqual(decoy.read_bytes(),b'untouched')
-                if fault=='corrupt': self.assertNotEqual((archive/'snapshot').read_bytes(),b'original')
-                elif fault=='incomplete': self.assertEqual(list(archive.iterdir()),[])
-                else: self.assertTrue(archive.is_file())
-                fixture.replica_fault('repair')
-                self.assertEqual((archive/'snapshot').read_bytes(),b'original')
+            fixture.replica_fault('block-write')
+            self.assertEqual(decoy.read_bytes(),b'untouched')
+            self.assertTrue(archive.is_file())
+            fixture.replica_fault('repair')
+            self.assertEqual((archive/'snapshot').read_bytes(),b'original')
 
 
 

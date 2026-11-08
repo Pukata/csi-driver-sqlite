@@ -21,24 +21,35 @@ class StatusTests(unittest.TestCase):
         self.assertIn('locked', state['reason'])
         self.assertIn('unknown', state['last_replication'])
 
-    def test_failed_fencing_and_restore_are_not_guessed(self):
-        for phase, expected in [('fencing', 'fencing authority'), ('fenced', 'replica restore')]:
-            with self.subTest(phase=phase):
-                state = status.describe(cm(recoveryPolicy='latest-replica', recovery={'phase': phase}))
-                self.assertIn(expected, state['reason'])
-                self.assertIn('controller logs', state['reason'])
-                self.assertEqual(state['recovery_phase'], phase)
+    def test_legacy_state_requires_migration_even_without_owner(self):
+        for fields in [{'recoveryPolicy': 'latest-replica'}, {'recoveryPolicy': 'unknown'},
+                       {'recoverySeed': 'old/seed'}, {'seedDigest': 'digest'},
+                       {'seedClaimedEpoch': 7}, {'replicaDirectory': 'replica-old'},
+                       {'recovery': {}}, {'recovery': {'phase': 'released'}},
+                       {'recovery': {'phase': 'fencing'}}, {'recovery': []}]:
+            with self.subTest(fields=fields):
+                state = status.describe(cm(owner='', **fields))
+                self.assertTrue(state['legacy_state'])
+                self.assertIn('migrate', state['reason'])
+                self.assertIn('does not authorize takeover', state['reason'])
 
     def test_active_owner_is_not_reported_as_a_failed_writer(self):
-        for policy in ('manual', 'latest-replica'):
+        for policy in ('', 'manual'):
             with self.subTest(policy=policy):
                 state = status.describe(cm(recoveryPolicy=policy))
                 self.assertIn('normal for an active writer', state['reason'])
                 self.assertIn('node health', state['reason'])
+                self.assertIn('never loses ownership automatically', state['reason'])
+                self.assertFalse(state['legacy_state'])
 
-    def test_released_requires_replacement_restore(self):
-        state = status.describe(cm(owner='', recovery={'phase': 'released'}))
-        self.assertIn('restore', state['reason'])
+    def test_unowned_state_does_not_prove_replica_health(self):
+        state = status.describe(cm(owner='', recovery=None, replicaDirectory='replica'))
+        self.assertFalse(state['legacy_state'])
+        self.assertIn('does not verify replica health', state['reason'])
+
+    def test_clean_and_deleted_states(self):
+        self.assertIn('normal detach', status.describe(cm(clean=True))['reason'])
+        self.assertIn('deleted', status.describe(cm(deleted=True))['reason'])
 
     def test_identity_mismatch_rejected(self):
         obj = cm()

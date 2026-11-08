@@ -65,13 +65,10 @@ jobs:
           set -euo pipefail
           namespace="${GITHUB_REPOSITORY_OWNER,,}"
           image="ghcr.io/$namespace/csi-driver-sqlite:$VERSION"
-          fence="ghcr.io/$namespace/csi-driver-sqlite-fence-redfish:$VERSION"
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           echo "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker build --build-arg VERSION="$VERSION" --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "$image" .
-          docker build -f integrations/redfish/Dockerfile --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "$fence" .
           docker push "$image"
-          docker push "$fence"
           sed -i "s|^image: .*|image: $image|" charts/sqlite-csi/values.yaml
           helm package charts/sqlite-csi --version "${VERSION#v}" --app-version "$VERSION" --destination dist
           helm push "dist/sqlite-csi-${VERSION#v}.tgz" "oci://ghcr.io/$namespace/charts"
@@ -79,9 +76,7 @@ jobs:
           helm pull "oci://ghcr.io/$namespace/charts/sqlite-csi" --version "${VERSION#v}" --destination /tmp/release-readback
           cmp "dist/sqlite-csi-${VERSION#v}.tgz" "/tmp/release-readback/sqlite-csi-${VERSION#v}.tgz"
           docker pull "$image"
-          docker pull "$fence"
           docker buildx imagetools inspect "$image" > dist/image-manifest.txt
-          docker buildx imagetools inspect "$fence" > dist/fencing-image-manifest.txt
           printf '%s\n' "$GITHUB_SHA" > dist/source-revision.txt
           (cd dist && sha256sum ./*.tgz ./*manifest.txt ./source-revision.txt > SHA256SUMS)
           cp docs/release-notes.md dist/notes.md

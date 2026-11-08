@@ -25,29 +25,27 @@ distinguishes successive owners. A timer expiring cannot make two writers safe.
 ## The failure case that matters
 
 A node that cannot reach Kubernetes might still run the app and access storage.
-Declaring it dead after a missed heartbeat is insufficient. Automatic takeover
-requires an independent authority to stop the exact mapped machine and confirm
-it cannot restart under the configured operational controls. Only then does the
-driver verify a recovery seed, quarantine the old node and release ownership.
-The new writer uses a separate replication history.
+Declaring it dead after a missed heartbeat is insufficient. The driver keeps
+ownership locked, even if Kubernetes schedules a replacement. Node-loss recovery
+is manual: an operator must ensure the old writer cannot run and assess the
+available database or backup. See the [recovery guidance](failure-recovery.md).
 
-The [Redfish integration](../integrations/redfish/README.md) supplies one authority
-implementation. Its manual-power-on precondition is explicit; it does not pretend
-that a BMC setting prevents every other actor from starting a host.
+The same conservative rule applies to planned moves. If the NAS cannot supply a
+verified final replica, the move waits. Fixing NAS access lets Kubernetes retry
+the clean handover. There is no host power controller or automatic takeover path.
 
 ## Evidence is executable
 
-The [CI harness](testing.md) provisions its own kind cluster and asserts denied
-fencing preserves ownership while the isolated writer still commits. It then
-kills the old worker, checks a missing replica blocks takeover, restores the
-archive, verifies the same PV recovers elsewhere, returns the stale worker under
-quarantine, and checks clean rejoin. The real Gatus manifest must retain original
-monitoring rows across a planned move and in fresh replica restores.
+The [test harness](testing.md) provisions its own kind cluster, verifies replica
+records, blocks a second writer and moves the app cleanly while preserving its
+PV and records. The real Gatus manifest must retain monitoring history across a
+planned move and continue writing. A separate NFS suite checks server restart,
+an outage blocking movement and failed replica writes blocking handover.
 
 Separate [resource testcases](performance.md) exercise deterministic database
 sizes, marker convergence, integrity and matching logical content. CI artifacts
-contain results and failure diagnostics. These tests model worker containers
-and a shared local directory, not physical power or a particular NAS's durability.
+contain results and failure diagnostics. The shared-directory suite and disposable NFS server do not establish physical
+power-loss behavior or a particular NAS's durability.
 
 ## Where this belongs
 
@@ -62,7 +60,7 @@ that storage is solved. Start with disposable data and report the exact image,
 backend and reproduction when behavior differs.
 
 This article is a prepared announcement draft. It has not been posted to any
-community. The first reference is [v0.2.0-alpha.1](https://github.com/Pukata/csi-driver-sqlite/releases/tag/v0.2.0-alpha.1),
+community. The historical first reference, before automatic takeover was removed, is [v0.2.0-alpha.1](https://github.com/Pukata/csi-driver-sqlite/releases/tag/v0.2.0-alpha.1),
 tested at source `715a9a7c0dda5480a65193b1321596991ad36ed3` by the
 [passing release workflow](https://github.com/Pukata/csi-driver-sqlite/actions/runs/42457082286).
 See the [recorded assertions and measurements](results/README.md).

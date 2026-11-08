@@ -13,9 +13,9 @@ not change the old volume's ownership or provide an import mechanism for an
 existing locked volume. Application-specific backups, schema migrations,
 external files and cutover procedures remain the application's responsibility.
 
-1. Stop the application and independently fence the old machine if it might
+1. Stop the application and stop or isolate the old machine if it might
    still run the writer. Confirm it is stopped and cannot restart, including
-   after network recovery. Keep it fenced until the old application and mounts
+   after network recovery. Keep it stopped or isolated until the old application and mounts
    are removed and the cutover is complete. Do not unlock or edit driver state.
 2. Choose a backup from independent storage. Restore a copy into isolated local
    scratch, with no application writing to it. Open it read-only, run

@@ -10,9 +10,9 @@ GitHub issues with sanitized reproduction steps.
 
 The node agent is privileged to perform CSI mounts. Install it only on trusted
 Linux nodes. Restrict access to the driver namespace, its volume state and its
-shared replica filesystem. A fencing authority can stop machines and must have
-its own independently secured credentials and identity checks.
+shared replica filesystem. Host power control and automatic node-loss takeover
+are outside this driver.
 
 Asynchronous replication does not guarantee preservation of every acknowledged
 SQLite commit. Do not substitute a stale lease, failed probe or Kubernetes taint
-for confirmed fencing. See [recovery guarantees](docs/failure-recovery.md).
+for proof that the old writer has stopped during manual recovery. See [recovery guarantees](docs/failure-recovery.md).

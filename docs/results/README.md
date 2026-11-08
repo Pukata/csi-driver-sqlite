@@ -1,5 +1,10 @@
 # Recorded testcase results
 
+These observations are historical and apply to the source revisions named below.
+The current driver has removed automatic node-loss takeover and Redfish/fencing
+integration. Those earlier results are retained unchanged as evidence of the
+older implementation; see [current test scope](../testing.md).
+
 ## SMB protocol failure modes
 
 The former SMB Kubernetes/NAS suite and its automatic CI job were removed.

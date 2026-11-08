@@ -33,8 +33,8 @@ writer to manufacture a clean move.
 4. Original record IDs, results and timestamps survive, and new checks are added.
 5. Another fresh replica restore retains the original history.
 
-These checks run on both Kubernetes versions in CI, after the driver's denied
-fencing, abrupt worker failure, missing archive and stale-worker return tests.
+These checks run on both Kubernetes versions in CI, after the driver's
+single-writer, replica verification and clean-movement tests.
 The Gatus case establishes clean movement for this pinned configuration. It
 does not by itself establish every app's compatibility or Gatus-specific
 sudden-failure durability. CI artifacts report each assertion.

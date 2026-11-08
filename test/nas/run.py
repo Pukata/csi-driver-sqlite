@@ -86,10 +86,6 @@ class NasSuite(Suite):
 
     def verify_topology(self):
         self.verify_backend()
-        self.k('patch','deployment','sqlite-csi-controller','-n','sqlite-csi-system','--type=merge',
-            '-p',json.dumps({'spec':{'template':{'spec':{'nodeSelector':{
-                'kubernetes.io/hostname':self.workers[1]}}}}}))
-        self.wait('controller placed on surviving worker before faults',lambda:(p:=self.controller()) and p['spec']['nodeName']==self.workers[1])
         self.template = copy.deepcopy(self.get('deployment','sqlite-test','-n','sqlite-test')['spec'])
         self.template['template']['spec']['nodeSelector'].pop('kubernetes.io/hostname',None)
         self.set_volume_id()
@@ -120,7 +116,7 @@ class NasSuite(Suite):
 
     def _create_application(self):
         self.apply({'apiVersion':'v1','kind':'PersistentVolumeClaim','metadata':{'name':'sqlite-test','namespace':'sqlite-test'},
-            'spec':{'storageClassName':'sqlite-csi-ha','accessModes':['ReadWriteOncePod'],
+            'spec':{'storageClassName':'sqlite-csi','accessModes':['ReadWriteOncePod'],
                     'resources':{'requests':{'storage':'1Gi'}}}})
         self.apply({'apiVersion':'apps/v1','kind':'Deployment','metadata':{'name':'sqlite-test','namespace':'sqlite-test'},
                     'spec':copy.deepcopy(self.template)})
@@ -198,10 +194,9 @@ class NasSuite(Suite):
         """
         self.nas()
         assert re.fullmatch(r'v-[a-f0-9]{32}', self.volume_id)
-        assert action in ('corrupt', 'incomplete', 'block-write', 'repair')
-        script = '''import os,pathlib,shutil,sys,uuid
+        assert action in ('block-write', 'repair')
+        script = '''import os,pathlib,sys,uuid
 # Match the publisher/controller identity, including restrictive NFS modes.
-# CIFS still authenticates through its existing mounted-share credentials.
 if os.geteuid()==0:
  os.setgroups([])
  os.setgid(1000)
@@ -218,23 +213,15 @@ action=sys.argv[2]
 if action=='repair':
  assert held.is_dir() and (archive.is_dir() or archive.is_file())
  # Rename through the protocol instead of replacing files behind cached
- # handles. Preserve damaged history for diagnosis; the old writer is fenced
- # or its publisher is already stopped before repair.
+ # handles. Preserve damaged history for diagnosis; the publisher is stopped
+ # before repair.
  archive.rename(volume/('.nas-test-damaged-'+uuid.uuid4().hex))
  held.rename(archive)
 else:
  assert archive.is_dir() and not held.exists()
  assert not any(p.is_symlink() for p in archive.rglob('*'))
  archive.rename(held)
- if action=='block-write':
-  archive.write_bytes(b'NAS test write obstruction')
- elif action=='incomplete':
-  archive.mkdir()
- else:
-  shutil.copytree(held,archive)
-  files=[p for p in archive.rglob('*') if p.is_file()]
-  assert files, 'replica history contains no files'
-  for p in files: p.write_bytes(b'corrupt replica data')
+ archive.write_bytes(b'NAS test write obstruction')
 '''
         if client is not None:
             # Inject live write faults through the publisher's protocol mount.
@@ -302,113 +289,7 @@ def cases(s):
             self.assertEqual(s.get('pv',s.pv_name)['metadata']['uid'],s.pv_uid)
             self.case_ok = True
 
-        def worker_failure(self,nas_outage):
-            before = s.volume()
-            source = self.original['spec']['nodeName']
-            source_ip = s.inspect(source)['NetworkSettings']['Networks'][s.name]['IPAddress']
-            if nas_outage:
-                s.disconnect_nas()
-                s.request(self.original,'acknowledged-after-nas-disconnect')
-                self.assertIn('acknowledged-after-nas-disconnect',[r[1] for r in s.request(self.original)['records']])
-            s.fencer.deny = False
-            s.run('docker','network','disconnect',s.network_id,s.inspect(source)['Id'])
-            s.wait('worker independently fenced',lambda:not s.inspect(source)['State']['Running'])
-            if nas_outage:
-                s.wait('fenced recovery waiting for replica backend',lambda:s.volume().get('recovery',{}).get('phase')=='fenced')
-                s.observe_locked(before,self.original['metadata']['uid'])
-            s.restore_nas()
-            replacement = s.wait('replacement restores from replica',lambda:(p:=s.app()) and p['spec']['nodeName']!=source and p,300)
-            records = [r[1] for r in s.request(replacement)['records']]
-            self.assertEqual(records[:len(self.expected)],self.expected)
-            self.assertTrue(all(v in self.expected+['acknowledged-after-nas-disconnect'] for v in records))
-            self.assertEqual(s.request(replacement,path='/integrity')['integrity'],['ok'])
-            self.assertGreater(s.volume()['epoch'],before['epoch'])
-            self.assertEqual(s.get('pv',s.pv_name)['metadata']['uid'],s.pv_uid)
-            self.assertTrue(s.volume()['replicaDirectory'].startswith('replica-r-'))
-            s.request(replacement,'after-combined-recovery')
-            records.append('after-combined-recovery')
-            s.wait('new writer publishes verified records after combined recovery',lambda:s.replica_records()==records)
-            s.run('docker','network','connect','--ip',source_ip,s.network_id,s.inspect(source)['Id'])
-            s.run('docker','start',s.inspect(source)['Id'])
-            s.wait('returning worker Ready under quarantine',lambda:any(c['type']=='Ready' and c['status']=='True'
-                   for c in s.get('node',source)['status']['conditions']))
-            self.assertTrue(s.get('node',source)['spec']['unschedulable'])
-            s.audit_returned(source,self.original['metadata']['uid'])
-            s.k('taint','node',source,'node.kubernetes.io/out-of-service-')
-            s.k('uncordon',source)
-
-        def test_30_worker_failure_with_nas_available(self):
-            self.worker_failure(False)
-            self.case_ok = True
-
-        def test_40_worker_failure_with_nas_unavailable(self):
-            self.worker_failure(True)
-            self.case_ok = True
-
-        def damaged_history(self, fault):
-            before = s.volume()
-            self.assertEqual(before.get('replicaDirectory','replica'),'replica')
-            source = self.original['spec']['nodeName']
-            source_ip = s.inspect(source)['NetworkSettings']['Networks'][s.name]['IPAddress']
-            # Keep recovery denied while simulating an abrupt worker crash and
-            # damaging its published history through the surviving NAS client.
-            # Protocol-based faults preserve the NFS client's metadata view.
-            s.fencer.deny = True
-            s.run('docker','network','disconnect',s.network_id,s.inspect(source)['Id'])
-            s.run('docker','kill','--signal=KILL',s.inspect(source)['Id'])
-            s.wait('old writer stopped before replica damage',lambda:not s.inspect(source)['State']['Running'])
-            s.observe_locked(before,self.original['metadata']['uid'])
-            client = next(p for p in s.pods('sqlite-csi-system','app=sqlite-csi-node')
-                          if p['spec']['nodeName'] != source and s.ready(p))
-            s.replica_fault(fault, client)
-            # The authority must independently reconfirm power-off before the
-            # controller can attempt restore; stopping a worker is not a proof.
-            s.fencer.deny = False
-            s.wait('recovery reaches fenced phase with damaged replica',lambda:s.volume().get('recovery',{}).get('phase')=='fenced')
-            def failure_count():
-                controller = s.controller()
-                if not controller: return 0
-                log = s.k('logs','-n','sqlite-csi-system',controller['metadata']['name'],'-c','driver','--tail=500')
-                return sum(s.volume_id in line and 'restore failed:' in line
-                           and (fault != 'corrupt' or 'invalid ltx file' in line.lower())
-                           for line in log.splitlines())
-            controller = s.controller()
-            self.assertIsNotNone(controller)
-            port = 2049
-            probe = 'import socket; socket.create_connection(('+repr(s.nas_ip)+','+str(port)+'),timeout=3).close()'
-            s.wait('NAS listener reachable from controller',lambda:s.k('exec','-n','sqlite-csi-system',
-                controller['metadata']['name'],'-c','driver','--','python3','-c',probe) is not None)
-            previous_failures = failure_count()
-            s.wait('controller attempted and rejected damaged history after reconnect',lambda:failure_count()>previous_failures)
-            with self.assertRaises(RuntimeError):
-                s.replica_records()
-            s.observe_locked(before,self.original['metadata']['uid'])
-            s.replica_fault('repair', s.controller())
-            s.wait('repaired history visible through a fresh restore', lambda:s.replica_records()==self.expected)
-            replacement = s.wait('repaired history restores to a replacement',lambda:(p:=s.app()) and p['spec']['nodeName']!=source and p,300)
-            self.assertEqual([r[1] for r in s.request(replacement)['records']],self.expected)
-            self.assertEqual(s.request(replacement,path='/integrity')['integrity'],['ok'])
-            self.assertGreater(s.volume()['epoch'],before['epoch'])
-            self.assertEqual(s.get('pv',s.pv_name)['metadata']['uid'],s.pv_uid)
-            s.wait('repaired recovery publishes a fresh replica',lambda:s.replica_records()==self.expected)
-            s.run('docker','network','connect','--ip',source_ip,s.network_id,s.inspect(source)['Id'])
-            s.run('docker','start',s.inspect(source)['Id'])
-            s.wait('returning worker Ready under quarantine',lambda:any(c['type']=='Ready' and c['status']=='True'
-                   for c in s.get('node',source)['status']['conditions']))
-            self.assertTrue(s.get('node',source)['spec']['unschedulable'])
-            s.audit_returned(source,self.original['metadata']['uid'])
-            s.k('taint','node',source,'node.kubernetes.io/out-of-service-')
-            s.k('uncordon',source)
-
-        def test_50_corrupt_history_blocks_recovery_until_repaired(self):
-            self.damaged_history('corrupt')
-            self.case_ok = True
-
-        def test_60_incomplete_history_blocks_recovery_until_repaired(self):
-            self.damaged_history('incomplete')
-            self.case_ok = True
-
-        def test_70_failed_replica_write_blocks_clean_handover(self):
+        def test_30_failed_replica_write_blocks_clean_handover(self):
             before = s.volume()
             self.assertEqual(before.get('replicaDirectory','replica'),'replica')
             agent = next(p for p in s.pods('sqlite-csi-system','app=sqlite-csi-node')
@@ -479,7 +360,7 @@ def main(suite_class=NasSuite, backend="real-nfs4", default_nas_image="sqlite-cs
         runner = unittest.TextTestRunner(verbosity=2,failfast=True,resultclass=lambda *args: result)
         result.stream = runner.stream
         runner.run(cases(suite))
-        if result.testsRun != 7 or not result.wasSuccessful(): raise AssertionError('NAS integration testcase failed or did not run')
+        if result.testsRun != 3 or not result.wasSuccessful(): raise AssertionError('NAS integration testcase failed or did not run')
     except Exception as caught:
         error = caught
         print('FAIL '+str(caught),file=sys.stderr,flush=True)

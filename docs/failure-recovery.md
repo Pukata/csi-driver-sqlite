@@ -1,166 +1,97 @@
 # Failure recovery
 
-Clean handover and unclean takeover have different guarantees. Clean handover
-compares the local database with a freshly restored replica before releasing
-ownership. Sudden failure cannot prove that every committed write was replicated.
+The driver supports one application writer, local SQLite, shared NAS replication
+and verified clean moves. Kubernetes manages the application lifecycle. There is
+no automatic node-loss takeover, external fencing integration or host power control.
 
-## Defaults and data loss
+## Clean movement
 
-The default `sqlite-csi` class requires manual recovery after an unclean node
-failure. No lease timeout or failed health probe releases a prepared writer.
+Kubernetes stops the old application Pod. The node driver unmounts its target,
+stops replication, restores a fresh copy from the shared replica and compares
+SQLite integrity and logical contents with the local database. Only successful
+verification marks the volume clean and permits controller detach. The next node
+claims a new epoch and restores the replica before exposing the volume.
 
-The optional `sqlite-csi-ha` class uses `recoveryPolicy: latest-replica`.
-It requires an independently secured fencing authority and accepts loss of
-unpublished writes. A successful SQLite commit is not a remote durability
-acknowledgement. A replica outage can extend the loss window indefinitely.
-Zero acknowledged-write loss requires synchronous durability and is not provided.
+If the NAS is unavailable, replica writes fail, or verification fails, ownership
+stays locked. Restore NAS access, inspect node-driver logs and let Kubernetes
+retry clean unpublish. Do not clear ownership or mark the volume clean by hand.
+An empty, never-initialized volume can detach without a database; a missing
+database from an initialized volume is an error, not permission to start empty.
 
-## Recovery order
+## Node loss and data loss
 
-1. Observe the owner node as NotReady or Unknown past the configured grace.
-2. Journal recovery intent against the current owner and epoch using API CAS.
-3. Recheck the node UID and failure transition.
-4. Ask the independent authority to stop the mapped machine and inhibit restart.
-5. Require fresh, matching power-off confirmation over authenticated TLS.
-6. Restore and integrity-check an immutable seed from the shared replica.
-7. Cordon the failed node and add the out-of-service NoExecute taint.
-8. Release the same guarded owner/epoch and restore the seed on a replacement.
-9. Publish the replacement into a new replica directory, separate from old history.
+An unreachable node may still run its application. No timeout, failed health
+probe, Pod deletion, cordon or taint proves that it has stopped. The driver never
+automatically releases its prepared owner or changes its epoch after node loss.
+A replacement Pod may wait for storage indefinitely. This is the intended contract.
 
-Failed authentication, wrong identity, unavailable fencing, missing/corrupt
-replicas, or failed quarantine leaves ownership locked. Missing data never
-becomes permission to initialize an empty replacement database.
+A successful SQLite commit is not a remote durability acknowledgement. Replication
+is asynchronous; recent unpublished writes may be lost after sudden failure, and
+a NAS outage can extend that loss window indefinitely. Keep independent backups.
 
-## External fencing API
+## Diagnose a locked volume
 
-The driver has no infrastructure-specific power-management backend. An operator
-supplies a service implementing this contract and connects it to an independent
-power or storage fence. That service must remain available outside the failed
-node, verify immutable machine identities, and prevent independent auto-restarts.
+Read the PV's `spec.csi.volumeHandle`, then run:
 
-The controller sends `POST <endpoint>/v1/fence` with a projected bearer token:
-
-```json
-{
-  "nodeName": "worker-a",
-  "nodeUID": "kubernetes-node-object-uid",
-  "machineID": "immutable-machine-identity",
-  "operationID": "recovery-operation-id",
-  "challenge": "fresh-random-challenge"
-}
+```sh
+python3 tools/volume-status.py --context <context> -n <driver-namespace> <volume-id>
 ```
 
-Only after independently confirming the old writer is stopped and cannot
-restart, the service returns HTTP 200 with the same five fields plus:
+This only reads the corresponding ConfigMap and requires permission to get it.
+Use `--file <captured-configmap.json>` for offline inspection. Without `--context`,
+the tool uses the current kubectl context. Review captured state before sharing it.
 
-```json
-{
-  "state": "off",
-  "restartInhibited": true,
-  "observedAt": "2026-01-01T12:00:00Z"
-}
-```
+A prepared, dirty owner is normal while an app is writing. Check application and
+node health, Kubernetes events, and node-driver/Litestream logs to distinguish
+an active writer from a failed clean move. The state does not persist replication
+or verification timestamps or the last error; the tool cannot infer freshness.
 
-Those snippets describe one combined response object, not two separate JSON
-documents. Echo the exact challenge and identities. Verify physical stop on
-every request, including retries of the same operation ID. A queued stop request,
-cordon, taint, stale lease, process probe or successful HTTP request is insufficient.
-Never fabricate confirmation when the underlying fencing mechanism is unreachable.
+## Manual node-loss recovery
 
-The driver rejects redirects, identity/challenge mismatch, non-`off` state,
-allowed restarts, stale proofs, unknown fields and invalid TLS. Clocks must be
-synchronized: the response observation must be within the current request's
-time window with up to five seconds of skew, and no older than one minute.
-Requests time out after 60 seconds; timeout means no proof. Token files are
-reread for every request to support projected-secret rotation.
+1. Keep ownership locked. Identify the original machine and ensure the old
+   application cannot write or restart, including after networking returns.
+   Stopping or isolating the machine is an operator responsibility, outside this
+   driver. Kubernetes API state alone cannot establish this.
+2. Preserve its local database, WAL files, driver state and shared replica history.
+   If the original node can safely return, prefer restoring its connectivity and
+   NAS access, then stopping the app through Kubernetes for a verified clean move.
+   Keep any alternative application instance stopped during this work.
+3. If the original node cannot return, restore an independent backup or a copy
+   of the latest usable replica to isolated local scratch. Verify SQLite integrity
+   and application records, and assess missing writes. Preserve the originals.
+4. Recovery onto a new PVC needs an application-specific, rehearsed import and
+   cutover. The driver has no force-release or backup-import command. Follow the
+   [independent backup guidance](independent-backup.md); it describes the limits
+   of the currently validated restore checks. Never replace a database file under
+   a running application or Litestream publisher.
+5. Before reusing the old node, remove stale application containers, mounts and
+   publishers under operator control. Keep its old data for diagnosis and never
+   copy it over the new writer. Only allow one application instance after cutover.
 
-The shared operation ID identifies an incident; the fresh challenge prevents
-reusing an earlier response as evidence that a machine is still stopped.
-The driver necessarily trusts the external authority's implementation of this
-contract. The included Docker service is a **test fixture**, not a deployable
-production fencing service.
+Do not patch owner, epoch, clean flags, recovery fields or replica paths to force
+same-volume takeover. A surviving control plane and reachable replica storage
+are needed for Kubernetes to move the application, but do not resolve a lost owner.
 
-An optional [Redfish authority](../integrations/redfish/README.md) implements
-this contract for supported BMCs. Its protocol has CI tests. Read its explicit
-manual-power-on and physical validation requirements before adopting it.
+## Upgrading legacy automatic-recovery volumes
 
-## Configuration
+Older revisions offered `sqlite-csi-ha`, `recoveryPolicy: latest-replica` and
+`failover.enabled`. These are removed. Helm rejects `failover.enabled=true`, and
+new volumes accept only an omitted policy or `manual`.
 
-Mount a Secret containing `config.json`, `ca.pem` and `token`. The token file
-contains the raw bearer token, without a `Bearer ` prefix:
+Existing automatic-recovery policy, recovery journal/seed fields or nonstandard
+replica directories require migration before use. The driver preserves legacy
+JSON state and rejects attachment, replication restart and clean release for
+such volumes. This also applies to sessions loaded after a node-agent restart;
+an old matching owner and epoch do not make the legacy history supported.
 
-```json
-{
-  "endpoint": "https://fencing.example:9443",
-  "caFile": "/fencing/ca.pem",
-  "tokenFile": "/fencing/token",
-  "manualPowerOnOnly": true,
-  "graceSeconds": 120,
-  "nodes": {
-    "worker-a": {
-      "nodeUID": "replace-with-node-object-uid",
-      "machineID": "replace-with-immutable-machine-identity"
-    }
-  }
-}
-```
+Before upgrading, stop and back up affected applications with the previous
+version and rehearse migration to new manual-policy PVCs. Changing only a
+StorageClass, clearing legacy fields, or removing the Helm flag does not migrate
+stored volume or local session state. If already upgraded into a blocked state,
+keep data intact and use the previous pinned version under operator control to
+prepare migration. The status tool identifies unsupported legacy state without
+interpreting old recovery phases as permission to resume a takeover.
 
-The service endpoint must be HTTPS with no credentials, query or fragment in
-the URL. Trust its CA explicitly, scope its credentials to the exact nodes, and
-restrict access to the Secret. `manualPowerOnOnly` is an operator guarantee;
-setting it does not disable an external auto-restart manager.
-
-Enable `failover.enabled`, set `failover.configSecret`, and select the separate
-`sqlite-csi-ha` class only for workloads accepting this policy. Existing manual
-volumes do not automatically opt in when fencing is enabled. Replacing a node
-object or machine requires deliberately updating its identity mapping.
-
-## Rejoin and limitations
-
-The driver never powers a node back on or clears its quarantine automatically.
-Keep it cordoned and out-of-service while confirming recovery, removal of old
-application containers, cleanup of stale mounts, and absence of stale publishers.
-Preserve its old local database and replica history for diagnosis. Never copy
-the old database over the new writer. Rejoin is a separate operator action.
-
-Automatic recovery also requires a surviving Kubernetes control plane and a
-reachable replica backend. A single-server cluster cannot reschedule workloads
-when its only server fails. Read [test coverage and limits](testing.md); passing
-container-based worker tests does not prove physical-host or backend durability.
-
-## Operator diagnosis and manual recovery
-
-Read the PV's `spec.csi.volumeHandle` to obtain the volume ID, then run
-`python3 tools/volume-status.py -n <driver-namespace> <volume-id>`. The command
-only reads the corresponding ConfigMap using your current kubectl context and
-requires permission to get that ConfigMap. Supply `--context <name>` to select
-an explicit context. To inspect a captured ConfigMap JSON
-without cluster access, use `--file <path>`. Do not share captured state without
-reviewing it. The report is a point-in-time snapshot: the controller does not
-persist the last replication time, verification time or error reason. A
-`fencing` phase can indicate an identity or authority failure; `fenced` can
-indicate restore or quarantine failure. Consult the controller logs for the
-actual error, verify its current context, and rerun the report. Neither a phase
-nor an old proof establishes the machine is currently fenced. Never infer
-replication freshness from a successful SQLite commit.
-
-For the default manual policy, leave the owner locked after an unclean failure.
-Independently stop the old machine and inhibit restart; verify the mapping of
-node name, Kubernetes UID and physical machine, and retain the evidence. If it
-can be safely returned to service, investigate it under quarantine and recover
-through a normal clean handover after fixing the cause. If it cannot, the driver
-has no documented manual procedure for safely releasing that existing owner.
-Follow the [independent backup guidance](independent-backup.md) after fencing;
-its proposed new-volume import still requires application-specific validation. Do not patch ownership, epochs, recovery fields or
-replica paths to force a takeover. Automatic recovery is opt-in per volume;
-enabling fencing does not convert existing manual volumes.
-
-For rejoin, first independently verify the old writer cannot restart, and
-preserve its local database and old replica history. Inspect the recovered
-workload and confirm the old application containers, mounts and publishers are
-removed. Compare the current node UID and immutable machine identity with the
-fencing authority's mapping; a recreated Node or replaced host requires a
-controlled mapping update before future automatic fencing. Only after the old
-workload cannot write and the current recovery is understood should an operator
-remove the out-of-service taint, uncordon and permit the host to rejoin according
-to the site's fencing procedure. Do not copy stale data onto the new writer.
+Existing manual volumes using the default `replica` history remain compatible.
+Historical release tests describe their original revisions, not the current
+feature set; see [test scope](testing.md) and [recorded results](results/README.md).

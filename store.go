@@ -11,24 +11,28 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type Volume struct {
-	ID               string          `json:"id"`
-	Database         string          `json:"database"`
-	Capacity         int64           `json:"capacity"`
-	Owner            string          `json:"owner,omitempty"`
-	Epoch            int64           `json:"epoch"`
-	Prepared         bool            `json:"prepared"`
-	Clean            bool            `json:"clean"`
-	Initialized      bool            `json:"initialized"`
-	Deleted          bool            `json:"deleted"`
+	ID          string `json:"id"`
+	Database    string `json:"database"`
+	Capacity    int64  `json:"capacity"`
+	Owner       string `json:"owner,omitempty"`
+	Epoch       int64  `json:"epoch"`
+	Prepared    bool   `json:"prepared"`
+	Clean       bool   `json:"clean"`
+	Initialized bool   `json:"initialized"`
+	Deleted     bool   `json:"deleted"`
+	// Retain legacy fields to avoid silently discarding persisted recovery state.
 	RecoveryPolicy   string          `json:"recoveryPolicy,omitempty"`
 	ReplicaDirectory string          `json:"replicaDirectory,omitempty"`
 	RecoverySeed     string          `json:"recoverySeed,omitempty"`
 	SeedDigest       string          `json:"seedDigest,omitempty"`
 	SeedClaimedEpoch int64           `json:"seedClaimedEpoch,omitempty"`
-	Recovery         *RecoveryRecord `json:"recovery,omitempty"`
+	Recovery         json.RawMessage `json:"recovery,omitempty"`
 }
 type configMap struct {
 	APIVersion string `json:"apiVersion"`
@@ -161,4 +165,26 @@ func (a *API) Edit(ctx context.Context, id string, change func(*Volume) error) (
 		return v, e
 	}
 	return Volume{}, fmt.Errorf("concurrent volume update; retry")
+}
+
+// Old automatic-recovery volumes require migration before use.
+func checkLegacyRecovery(v Volume) error {
+	if (v.RecoveryPolicy != "" && v.RecoveryPolicy != "manual") ||
+		v.RecoverySeed != "" || v.SeedDigest != "" || v.SeedClaimedEpoch != 0 ||
+		(len(v.Recovery) != 0 && string(bytes.TrimSpace(v.Recovery)) != "null") {
+		return status.Error(codes.FailedPrecondition, "legacy automatic-recovery volume: migrate to a new manual-policy PVC before using this driver")
+	}
+	return checkReplicaDirectory(v.ReplicaDirectory)
+}
+func checkReplicaDirectory(directory string) error {
+	if directory != "" && directory != "replica" {
+		return status.Error(codes.FailedPrecondition, "legacy replica directory: migrate to a new manual-policy PVC before using this driver")
+	}
+	return nil
+}
+func normalizedPolicy(s string) string {
+	if s == "" {
+		return "manual"
+	}
+	return s
 }

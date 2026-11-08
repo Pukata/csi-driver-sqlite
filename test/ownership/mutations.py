@@ -15,9 +15,9 @@ MUTATIONS = [
      'TestOwnershipStateMachine'),
     ('epoch increment omitted', 'controller.go', 'v.Epoch++', '// epoch increment omitted',
      'TestOwnershipStateMachine'),
-    ('fencing proof mismatch ignored', 'recovery.go',
-     'if proof.NodeUID != node.UID || proof.OperationID != record.ID || proof.MachineID == "" || proof.ObservedAt.IsZero() {',
-     'if false {', 'TestMismatchedPowerProofNeverRestoresOrUnlocks'),
+    ('dirty release accepted', 'controller.go',
+     'if v.Prepared && !v.Clean {', 'if false {',
+     'TestUncleanOwnerStaysLocked'),
 ]
 
 

@@ -21,9 +21,8 @@ var validDatabase = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
 type Controller struct {
 	csi.UnimplementedControllerServer
-	store           Store
-	backing         string
-	recoveryEnabled bool
+	store   Store
+	backing string
 }
 
 func checkCapability(cap *csi.VolumeCapability) error {
@@ -39,6 +38,9 @@ func checkID(id string) error {
 	return nil
 }
 func acquire(v *Volume, node string) error {
+	if e := checkLegacyRecovery(*v); e != nil {
+		return e
+	}
 	if v.Deleted {
 		return status.Error(codes.NotFound, "volume is retained but deleted")
 	}
@@ -54,6 +56,9 @@ func acquire(v *Volume, node string) error {
 	return nil
 }
 func release(v *Volume, node string) error {
+	if e := checkLegacyRecovery(*v); e != nil {
+		return e
+	}
 	if v.Owner == "" {
 		return nil
 	}
@@ -61,7 +66,7 @@ func release(v *Volume, node string) error {
 		return status.Error(codes.FailedPrecondition, "different node owns volume")
 	}
 	if v.Prepared && !v.Clean {
-		return status.Error(codes.FailedPrecondition, "node has not verified a clean final replica; fencing/recovery is required")
+		return status.Error(codes.FailedPrecondition, "node has not verified a clean final replica; restore NAS access and retry clean unmount")
 	}
 	v.Owner = ""
 	return nil
@@ -80,11 +85,8 @@ func (c *Controller) CreateVolume(ctx context.Context, r *csi.CreateVolumeReques
 	}
 	database := r.Parameters["database"]
 	policy := r.Parameters["recoveryPolicy"]
-	if policy != "" && policy != "manual" && policy != "latest-replica" {
+	if policy != "" && policy != "manual" {
 		return nil, status.Error(codes.InvalidArgument, "unsupported recoveryPolicy")
-	}
-	if policy == "latest-replica" && !c.recoveryEnabled {
-		return nil, status.Error(codes.FailedPrecondition, "automatic recovery requires an explicitly configured fencer")
 	}
 	if database == "" {
 		database = "database.db"
@@ -104,6 +106,9 @@ func (c *Controller) CreateVolume(ctx context.Context, r *csi.CreateVolumeReques
 	}
 	if v.Deleted || v.Database != database || v.Capacity < capacity || normalizedPolicy(v.RecoveryPolicy) != normalizedPolicy(policy) {
 		return nil, status.Error(codes.AlreadyExists, "volume exists with different parameters")
+	}
+	if e = checkLegacyRecovery(v); e != nil {
+		return nil, e
 	}
 	if e = os.MkdirAll(filepath.Join(c.backing, id, "replica"), 0770); e != nil {
 		return nil, e

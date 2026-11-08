@@ -21,7 +21,7 @@ recovery attempts. Missing data must never silently become a fresh database.
 
 ## Kubernetes tests
 
-Install Docker, kind v0.33.0, kubectl, Helm 3, Python 3 and OpenSSL, then run:
+Install Docker, kind v0.33.0, kubectl, Helm 3, Python 3, then run:
 
 ```sh
 make image e2e
@@ -29,12 +29,12 @@ make image e2e
 
 The harness creates a uniquely named kind cluster and a separate kubeconfig.
 It never uses the active Kubernetes context or an existing cluster. Test data is
-disposable. Its fencing service can stop only the exact worker containers
-created by that run. Logs and a result summary are saved under `.e2e/`.
+disposable. Cleanup checks ownership of the resources created by that run.
+Logs and a result summary are saved under `.e2e/`.
 
 CI tests the same harness on two Kubernetes minor versions. It covers real CSI
-mounts, single-writer enforcement, clean movement, denied fencing, missing
-replicas, abrupt worker termination, verified recovery and old-node rejoin.
+mounts, single-writer enforcement, verified replica contents, same-PV clean
+movement and preservation of real Gatus history.
 An external shared filesystem is simulated with a directory mounted into the
 test nodes. These checks do not validate a particular storage server, physical
 host failure or control-plane quorum loss.

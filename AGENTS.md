@@ -1,14 +1,14 @@
 # Working on this repository
 
 This is an experimental SQLite-aware CSI driver for Kubernetes homelabs.
-It supports one application Pod per database volume. Preserve independent
-fencing and verified restore before any unclean ownership takeover.
+It supports one application Pod per database volume. Preserve single ownership and verified replicas before clean handover.
+Node-loss recovery is manual; do not add automatic takeover or host power control.
 
 Use `gofmt`. Run `make verify test build chart` for relevant code/chart changes.
 Run `make image e2e` when changing storage ownership, restore, mounts or recovery.
 The end-to-end harness creates its own kind cluster and kubeconfig; never point
 fault injection at an existing cluster. Keep test credentials out of Git.
-Run `make integration-test` for Redfish authority changes and `make image benchmark`
+Run `make integration-test` for tooling and fixture changes and `make image benchmark`
 for resource/digest changes. Keep application migration tooling outside this project.
 Run `make image nas-image nas-test` for changes to NAS fixtures or backend recovery.
 The NAS suite creates its own NFS server and cluster; never substitute an existing NAS.

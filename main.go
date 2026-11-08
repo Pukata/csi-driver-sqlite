@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
@@ -40,7 +39,6 @@ func main() {
 	kubelet := flag.String("kubelet-root", "/var/lib/kubelet", "kubelet root")
 	namespace := flag.String("namespace", "sqlite-csi-system", "state namespace")
 	nodeID := flag.String("node-id", os.Getenv("NODE_NAME"), "Kubernetes node name")
-	fencingConfig := flag.String("fencing-config", "", "opt-in external fencing configuration")
 	flag.Parse()
 	if *mode != "node" && *mode != "controller" {
 		log.Fatal("mode must be node or controller")
@@ -69,16 +67,7 @@ func main() {
 	defer cancel()
 	var supervisorDone chan struct{}
 	if *mode == "controller" {
-		csi.RegisterControllerServer(server, &Controller{store: api, backing: *backing, recoveryEnabled: *fencingConfig != ""})
-		if *fencingConfig != "" {
-			fencer, err := loadFencer(*fencingConfig)
-			if err != nil {
-				log.Fatal(err)
-			}
-			recovery := &RecoveryController{Store: api, Cluster: api, Fencer: fencer, Grace: time.Duration(fencer.config.GraceSeconds) * time.Second, Now: time.Now, Prepare: prepareReplica(*backing)}
-			supervisorDone = make(chan struct{})
-			go func() { defer close(supervisorDone); recovery.run(ctx) }()
-		}
+		csi.RegisterControllerServer(server, &Controller{store: api, backing: *backing})
 	} else {
 		if *nodeID == "" {
 			log.Fatal("node ID required")

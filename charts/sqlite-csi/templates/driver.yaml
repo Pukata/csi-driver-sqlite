@@ -1,3 +1,6 @@
+{{- if and .Values.failover .Values.failover.enabled }}
+{{- fail "automatic failover was removed; migrate legacy HA volumes to the standard sqlite-csi StorageClass" }}
+{{- end }}
 {{- if .Values.createBackingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -33,20 +36,6 @@ reclaimPolicy: Retain
 volumeBindingMode: Immediate
 allowVolumeExpansion: false
 ---
-{{- if .Values.failover.enabled }}
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: {{ .Values.failover.storageClass }}
-provisioner: sqlite.csi
-parameters:
-  database: database.db
-  recoveryPolicy: latest-replica
-reclaimPolicy: Retain
-volumeBindingMode: Immediate
-allowVolumeExpansion: false
----
-{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata: {name: sqlite-csi-controller}
@@ -68,11 +57,6 @@ rules:
   - apiGroups: ['']
     resources: [nodes]
     verbs: [get, list, watch]
-  {{- if .Values.failover.enabled }}
-  - apiGroups: ['']
-    resources: [nodes]
-    verbs: [patch]
-  {{- end }}
   - apiGroups: ['']
     resources: [events]
     verbs: [get, list, watch, create, update, patch]
@@ -134,17 +118,11 @@ spec:
           args:
             - --mode=controller
             - --namespace={{ .Release.Namespace }}
-            {{- if .Values.failover.enabled }}
-            - --fencing-config=/fencing/config.json
-            {{- end }}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {memory: 128Mi}}
           volumeMounts:
             - {name: socket, mountPath: /csi}
             - {name: backing, mountPath: /replicas}
-            {{- if .Values.failover.enabled }}
-            - {name: fencing, mountPath: /fencing, readOnly: true}
-            {{- end }}
         - name: provisioner
           image: {{ .Values.provisionerImage }}
           args: [--csi-address=/csi/csi.sock, --leader-election, --timeout=120s, --extra-create-metadata]
@@ -158,12 +136,6 @@ spec:
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
           volumeMounts: [{name: socket, mountPath: /csi}]
       volumes:
-        {{- if .Values.failover.enabled }}
-        - name: fencing
-          secret:
-            secretName: {{ required "failover.configSecret must contain config.json, CA and scoped token" .Values.failover.configSecret }}
-            defaultMode: 0440
-        {{- end }}
         - {name: socket, emptyDir: {}}
         - name: backing
           persistentVolumeClaim: {claimName: {{ .Values.backingClaim }}}
@@ -178,9 +150,6 @@ spec:
     metadata: {labels: {app: sqlite-csi-node}}
     spec:
       serviceAccountName: sqlite-csi-node
-      # A returning fenced node still needs its agent to clean stale mounts.
-      tolerations:
-        - {key: node.kubernetes.io/out-of-service, operator: Exists, effect: NoExecute}
       {{- if .Values.pullSecret }}
       imagePullSecrets: [{name: {{ .Values.pullSecret }}}]
       {{- end }}

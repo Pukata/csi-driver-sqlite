@@ -1,6 +1,5 @@
 """Run storage scenarios in a uniquely owned kind cluster, never an active context."""
 import argparse
-import ipaddress
 import json
 import os
 import secrets
@@ -9,7 +8,6 @@ import sys
 import time
 from pathlib import Path
 
-from fence import FenceServer
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -27,7 +25,6 @@ class Suite:
         self.image = image
         self.network_id = None
         self.created = False
-        self.fencer = None
         self.steps = []
         self.replicas = self.root/'replicas'
         self.replicas.mkdir()
@@ -81,28 +78,12 @@ class Suite:
     def volume(self):
         return json.loads(self.get('configmap', self.volume_id, '-n', 'sqlite-csi-system')['data']['volume.json'])
 
-    def inspect(self, node):
-        assert node in self.mappings, 'Refusing a Docker operation on a node outside this run'
-        machine = json.loads(self.run('docker', 'inspect', node))[0]
-        assert machine['Id'] == self.mappings[node]['containerID'], 'Worker identity changed'
-        return machine
-
-    def request(self, pod, marker=None, path='/records', local=False):
+    def request(self, pod, marker=None, path='/records'):
         body = json.dumps({'value': marker}).encode() if marker else None
         script = ('import urllib.request,json; r=urllib.request.Request("http://127.0.0.1:8080'+path+'",'
                   'headers={"Content-Type":"application/json"},data='+repr(body)+');'
                   'print(urllib.request.urlopen(r,timeout=10).read().decode())')
-        if local:
-            node = pod['spec']['nodeName']
-            machine = self.inspect(node)
-            containers = json.loads(self.run('docker', 'exec', machine['Id'], 'crictl',
-                                            '--runtime-endpoint=unix:///run/containerd/containerd.sock', 'ps', '-o', 'json'))['containers']
-            container = next(c['id'] for c in containers if c['metadata']['name']=='app' and
-                             c['labels'].get('io.kubernetes.pod.uid')==pod['metadata']['uid'])
-            result = self.run('docker', 'exec', machine['Id'], 'crictl',
-                              '--runtime-endpoint=unix:///run/containerd/containerd.sock', 'exec', container, 'python3', '-c', script)
-        else:
-            result = self.k('exec', '-n', 'sqlite-test', pod['metadata']['name'], '-c', 'app', '--', 'python3', '-c', script)
+        result = self.k('exec', '-n', 'sqlite-test', pod['metadata']['name'], '-c', 'app', '--', 'python3', '-c', script)
         return json.loads(result)
 
     def replica_records(self):
@@ -138,19 +119,7 @@ with tempfile.TemporaryDirectory() as d:
     def setup(self):
         existing = self.run('kind', 'get', 'clusters').splitlines()
         assert self.name not in existing
-        # Reserve an explicit subnet so a stopped worker can return on its exact
-        # original IP. Avoid existing Docker networks and host non-default routes.
-        occupied = []
-        ids = self.run('docker', 'network', 'ls', '-q').splitlines()
-        for network in json.loads(self.run('docker', 'network', 'inspect', *ids)):
-            occupied.extend(ipaddress.ip_network(c['Subnet']) for c in (network['IPAM'].get('Config') or []) if c.get('Subnet'))
-        for route in json.loads(self.run('ip', '-j', '-4', 'route', 'show')):
-            if route.get('dst') not in (None, 'default'):
-                occupied.append(ipaddress.ip_network(route['dst'], strict=False))
-        subnet = next(ipaddress.ip_network(f'10.250.{n}.0/24') for n in range(1,255)
-                      if not any(ipaddress.ip_network(f'10.250.{n}.0/24').overlaps(p) for p in occupied if p.version==4))
-        self.gateway = str(subnet.network_address+1)
-        self.network_id = self.run('docker', 'network', 'create', '--subnet', str(subnet), '--gateway', self.gateway,
+        self.network_id = self.run('docker', 'network', 'create',
                                    '--label', 'sqlite-csi.e2e='+self.name, self.name)
         config = {'kind':'Cluster', 'apiVersion':'kind.x-k8s.io/v1alpha4', 'networking':{'ipFamily':'ipv4'},
                   'nodes':[{'role':role,'extraMounts':self.node_mounts()}
@@ -166,7 +135,7 @@ with tempfile.TemporaryDirectory() as d:
         nodes = self.get('nodes')['items']
         expected = {self.name+'-control-plane',self.name+'-worker',self.name+'-worker2'}
         assert {n['metadata']['name'] for n in nodes} == expected
-        self.mappings = {}
+        self.workers = []
         for node in nodes:
             name = node['metadata']['name']
             if name.endswith('control-plane'):
@@ -174,39 +143,22 @@ with tempfile.TemporaryDirectory() as d:
             machine = json.loads(self.run('docker', 'inspect', name))[0]
             assert machine['Config']['Labels']['io.x-k8s.kind.cluster'] == self.name
             self.run('docker', 'update', '--restart=no', machine['Id'])
-            self.mappings[name] = {'containerID':machine['Id'], 'machineID':'docker:'+machine['Id'],
-                                   'nodeUID':node['metadata']['uid']}
-        self.workers = sorted(self.mappings)
+            self.workers.append(name)
+        self.workers.sort()
         self.k('label', 'node', *self.workers, 'sqlite.csi/enabled=true')
         self.k('cordon', self.workers[1])
         self.run('kind', 'load', 'docker-image', self.image, '--name', self.name, timeout=360)
-        certificate, key = self.root/'tls.crt', self.root/'tls.key'
-        self.run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
-                 '-keyout', str(key), '-out', str(certificate), '-subj', '/CN=sqlite-csi-e2e',
-                 '-addext', 'subjectAltName=IP:'+self.gateway)
-        token = secrets.token_hex(32)
-        token_path = self.root/'token'
-        token_path.write_text(token)
-        token_path.chmod(0o600)
-        self.fencer = FenceServer(self.mappings, token, self.replicas, certificate, key, self.image)
-        config = {'endpoint':f'https://{self.gateway}:{self.fencer.port}', 'caFile':'/fencing/ca.pem',
-                  'tokenFile':'/fencing/token', 'manualPowerOnOnly':True,'graceSeconds':5,
-                  'nodes':{name:{'nodeUID':m['nodeUID'],'machineID':m['machineID']} for name,m in self.mappings.items()}}
         for namespace in ('sqlite-csi-system','sqlite-test'):
             self.apply({'apiVersion':'v1','kind':'Namespace','metadata':{'name':namespace,
                         'labels':{'pod-security.kubernetes.io/enforce':'privileged'}}})
         self.configure_backing()
-        self.k('create','secret','generic','test-fencing','-n','sqlite-csi-system',
-               '--from-file=ca.pem='+str(certificate),'--from-file=token='+str(token_path),
-               '--from-literal=config.json='+json.dumps(config))
         self.run('helm','upgrade','--install','sqlite-csi',str(REPO/'charts/sqlite-csi'),
                  '--kubeconfig',str(self.kubeconfig),'--kube-context','kind-'+self.name,
-                 '-n','sqlite-csi-system','--set','image='+self.image,'--set','failover.enabled=true',
-                 '--set','failover.configSecret=test-fencing','--wait','--timeout','300s')
+                 '-n','sqlite-csi-system','--set','image='+self.image,'--wait','--timeout','300s')
         self.apply({'apiVersion':'v1','kind':'ConfigMap','metadata':{'name':'sqlite-app','namespace':'sqlite-test'},
                     'data':{'app.py':(REPO/'test/e2e/app.py').read_text()}})
         self.apply({'apiVersion':'v1','kind':'PersistentVolumeClaim','metadata':{'name':'sqlite-test','namespace':'sqlite-test'},
-                    'spec':{'storageClassName':'sqlite-csi-ha','accessModes':['ReadWriteOncePod'],
+                    'spec':{'storageClassName':'sqlite-csi','accessModes':['ReadWriteOncePod'],
                             'resources':{'requests':{'storage':'1Gi'}}}})
         self.apply({'apiVersion':'apps/v1','kind':'Deployment','metadata':{'name':'sqlite-test','namespace':'sqlite-test'},
                     'spec':{'replicas':1,'strategy':{'type':'Recreate'},'selector':{'matchLabels':{'app':'sqlite-test'}},
@@ -228,8 +180,6 @@ with tempfile.TemporaryDirectory() as d:
         source_pod = self.app()
         source = source_pod['spec']['nodeName']
         assert source == self.workers[0]
-        assert self.controller()['spec']['nodeName'] == source
-        source_ip = self.inspect(source)['NetworkSettings']['Networks'][self.name]['IPAddress']
         pv_name = self.get('pvc','sqlite-test','-n','sqlite-test')['spec']['volumeName']
         pv = self.get('pv',pv_name)
         self.volume_id = pv['spec']['csi']['volumeHandle']
@@ -245,74 +195,19 @@ with tempfile.TemporaryDirectory() as d:
         self.wait('second writer blocked by ReadWriteOncePod',lambda:any(c['type']=='PodScheduled' and c['status']=='False'
                   and 'ReadWriteOncePod' in c.get('message','') for c in self.get('pod','second-writer','-n','sqlite-test').get('status',{}).get('conditions',[])))
         self.k('delete','pod','second-writer','-n','sqlite-test','--wait=true')
-        self.fencer.hide_volume = self.volume_id
-        self.run('docker','network','disconnect',self.network_id,self.inspect(source)['Id'])
-        self.wait('controller rescheduled away from partitioned writer',lambda:(p:=self.controller()) and p['spec']['nodeName']!=source)
-        self.wait('denied fencing blocks ownership release',lambda:self.volume().get('recovery',{}).get('phase')=='fencing' and bool(self.fencer.events))
-        assert self.volume()['owner']==source and self.volume()['epoch']==before['epoch']
-        assert self.inspect(source)['State']['Running']
-        assert not any(t['key']=='node.kubernetes.io/out-of-service' for t in self.get('node',source)['spec'].get('taints',[]))
-        self.request(source_pod,'durable-during-partition',local=True)
-        expected.append('durable-during-partition')
-        self.wait('partitioned writer still commits and publishes while fence is denied',lambda:self.replica_records()==expected)
-        self.fencer.deny = False
-        self.wait('independent fence actually terminates old worker',lambda:not self.inspect(source)['State']['Running'])
-        self.wait('missing replica leaves fenced owner locked',lambda:self.fencer.archive(self.volume_id,'held')
-                  and self.volume().get('recovery',{}).get('phase')=='fenced')
-        time.sleep(8)
-        assert self.volume()['owner']==source and self.volume()['epoch']==before['epoch']
-        assert not self.app(), 'Missing replica created an empty replacement'
-        with self.fencer.lock:
-            self.fencer.hide_volume = None
-            self.fencer.archive(self.volume_id,'restore')
-        replacement = self.wait('replacement writer ready on other worker',self.app,300)
-        assert replacement['spec']['nodeName']!=source
+        # Kubernetes stops the old Pod; CSI verifies the replica before releasing ownership.
+        self.k('cordon',source)
+        self.k('delete','pod',source_pod['metadata']['name'],'-n','sqlite-test','--wait=false')
+        moved = self.wait('clean handover to other worker',
+                         lambda:(p:=self.app()) and p['spec']['nodeName']!=source and p,300)
         assert self.get('pv',pv_name)['metadata']['uid']==pv['metadata']['uid']
         assert self.volume()['epoch']>before['epoch']
-        assert self.volume()['replicaDirectory'].startswith('replica-r-')
-        assert [r[1] for r in self.request(replacement)['records']]==expected
-        assert self.request(replacement,path='/integrity')['integrity']==['ok']
-        self.wait('recovered data replicated into separate history',lambda:self.replica_records()==expected)
-        self.run('docker','network','connect','--ip',source_ip,self.network_id,self.inspect(source)['Id'])
-        self.run('docker','start',self.inspect(source)['Id'])
-        self.wait('old worker returns Ready under quarantine',lambda:any(c['type']=='Ready' and c['status']=='True'
-                  for c in self.get('node',source)['status']['conditions']))
-        node = self.get('node',source)
-        assert node['spec']['unschedulable']
-        assert any(t['key']=='node.kubernetes.io/out-of-service' for t in node['spec']['taints'])
-        self.audit_returned(source,source_pod['metadata']['uid'])
-        self.request(replacement,'durable-after-return')
-        expected.append('durable-after-return')
-        self.wait('active replica progresses after stale worker returns',lambda:self.replica_records()==expected)
-        self.k('taint','node',source,'node.kubernetes.io/out-of-service-')
-        self.k('uncordon',source)
-        self.k('cordon',replacement['spec']['nodeName'])
-        self.k('delete','pod',replacement['metadata']['name'],'-n','sqlite-test','--wait=false')
-        moved = self.wait('clean handover onto returned worker',lambda:(p:=self.app()) and p['spec']['nodeName']==source and p,300)
         assert [r[1] for r in self.request(moved)['records']]==expected
         assert self.request(moved,path='/integrity')['integrity']==['ok']
-        self.wait('clean rejoin preserves records in a fresh restore',lambda:self.replica_records()==expected)
-
-    def audit_returned(self,node,old_uid):
-        def no_old_container():
-            data = json.loads(self.run('docker','exec',self.inspect(node)['Id'],'crictl',
-                '--runtime-endpoint=unix:///run/containerd/containerd.sock','ps','-o','json'))
-            return not any(c['labels'].get('io.kubernetes.pod.uid')==old_uid for c in data['containers'])
-        self.wait('old application container is gone',no_old_container)
-        agent = self.wait('returning node agent Ready',lambda:next((p for p in self.pods('sqlite-csi-system','app=sqlite-csi-node')
-                               if p['spec']['nodeName']==node and self.ready(p)),None))
-        script = '''import pathlib
-matches=[]
-for p in pathlib.Path('/proc').glob('[0-9]*/cmdline'):
- try:
-  args=p.read_bytes().split(b'\\0')
-  if args and args[0].rsplit(b'/',1)[-1]==b'litestream' and b'replicate' in args: matches.append(p.parent.name)
- except OSError: pass
-assert not matches, 'stale publisher still running'
-print('ok')
-'''
-        self.wait('returning worker has no stale publisher',lambda:self.k('exec','-n','sqlite-csi-system',agent['metadata']['name'],
-                  '-c','driver','--','python3','-c',script)=='ok')
+        self.request(moved,'after-clean-move')
+        expected.append('after-clean-move')
+        self.wait('moved writer publishes a verified replica',lambda:self.replica_records()==expected)
+        self.k('uncordon',source)
 
     def gatus_test(self):
         """Run the checked-in real application manifest; retain actual history across a move."""
@@ -375,7 +270,7 @@ with tempfile.TemporaryDirectory() as directory:
 
     def collect(self, error):
         result = {'result':'FAIL' if error else 'PASS','cluster':self.name,'steps':self.steps,
-                  'error':str(error) if error else None,'fencingEvents':self.fencer.events if self.fencer else []}
+                  'error':str(error) if error else None}
         (self.artifacts/'result.json').write_text(json.dumps(result,indent=2))
         if not self.kubeconfig.exists():return
         for name,args in [('nodes',('get','nodes','-o','wide')),('pods',('get','pods','-A','-o','wide')),
@@ -393,7 +288,6 @@ with tempfile.TemporaryDirectory() as directory:
                     except Exception:pass
 
     def close(self):
-        if self.fencer:self.fencer.close()
         if self.created:
             assert self.name.startswith('sqlite-csi-e2e-')
             self.run('kind','delete','cluster','--name',self.name,'--kubeconfig',str(self.kubeconfig))
@@ -404,7 +298,7 @@ with tempfile.TemporaryDirectory() as directory:
                 network=json.loads(self.run('docker','network','inspect',self.network_id))[0]
                 assert network['Labels'].get('sqlite-csi.e2e')==self.name
                 self.run('docker','network','rm',self.network_id)
-        for name in ('token','tls.key','kubeconfig'):
+        for name in ('kubeconfig',):
             (self.root/name).unlink(missing_ok=True)
 
 

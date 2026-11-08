@@ -1,7 +1,7 @@
 # Installing and making experimental releases
 
 Releases are explicit prereleases such as `v0.2.0-alpha.1`. The release workflow
-runs all Go, chart, fencing, resource and Kubernetes testcases against the exact
+runs all Go, chart, ownership, resource and Kubernetes testcases against the exact
 source revision before publishing images, an OCI Helm chart, checksums and source
 identity. No floating `latest` tag is published. Initial images are Linux amd64.
 
@@ -44,7 +44,7 @@ independent backups and use disposable data before upgrading pre-release state.
 4. Verify the release assets and image/chart registry pulls. Do not move a tag or
    overwrite a published package to fix a release. Use a new prerelease version.
 5. If publication fails partway, inspect existing packages before retrying. The
-   workflow is serialized, but publication across three registries/packages and
+   workflow is serialized, but publication of the driver image, chart and
    a GitHub release is not one atomic transaction. Use a new version if uncertain.
 
 The workflow uses the repository-scoped GITHUB_TOKEN; only its publish job gets

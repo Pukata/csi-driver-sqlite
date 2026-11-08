@@ -11,31 +11,25 @@ def describe(cm):
     if v['id'] != cm['metadata']['name']:
         raise ValueError('volume ID does not match ConfigMap name')
     policy = v.get('recoveryPolicy') or 'manual'
-    recovery = v.get('recovery') or {}
-    phase = recovery.get('phase', 'none recorded')
-    if v.get('deleted'):
+    legacy = (policy != 'manual' or bool(v.get('recoverySeed')) or bool(v.get('seedDigest'))
+              or bool(v.get('seedClaimedEpoch')) or v.get('recovery') is not None
+              or v.get('replicaDirectory', '') not in ('', 'replica'))
+    if legacy:
+        reason = 'Legacy automatic-recovery state is unsupported. Keep this state and its data intact; migrate to a new manual-policy PVC using the failure recovery runbook before using this driver. A recorded recovery phase does not authorize takeover.'
+    elif v.get('deleted'):
         reason = 'Volume is marked deleted; investigate before attempting recovery.'
     elif v.get('owner') and v.get('prepared') and not v.get('clean'):
-        if policy == 'manual':
-            reason = 'Prepared owner is locked under manual policy; this is also normal for an active writer. Check workload and node health before diagnosing a failure. For unclean recovery, independently fence the old writer and follow the manual recovery runbook.'
-        elif phase == 'fencing':
-            reason = 'Recovery is at fencing; verify node identity and the independent fencing authority. Check controller logs for the failure.'
-        elif phase == 'fenced':
-            reason = 'Fencing was recorded; replica restore, verification, or quarantine may be blocked. Check controller logs; keep the old writer fenced.'
-        else:
-            reason = 'Prepared owner is locked; this is also normal for an active writer. Check workload and node health, grace period, identity mapping and controller logs. Unclean takeover requires independent fencing.'
+        reason = 'Prepared owner is locked; this is also normal for an active writer. Check workload and node health. If a clean move is blocked, check node-driver logs and restore NAS access so verification can succeed. An unreachable node never loses ownership automatically; node-loss recovery is manual.'
     elif v.get('owner'):
         reason = 'Owner is recorded; a move depends on normal detach and clean handover.'
-    elif phase == 'released':
-        reason = 'Recovery released the old owner; replacement must claim and restore the verified seed.'
     else:
         reason = 'No owner recorded. This alone does not verify replica health or authorize a manual takeover.'
     return {'volume': v['id'], 'owner': v.get('owner') or '(none)', 'epoch': v.get('epoch'),
             'prepared': v.get('prepared'), 'clean': v.get('clean'), 'initialized': v.get('initialized'),
-            'policy': policy, 'recovery_phase': phase, 'recovery_id': recovery.get('id') or '(none)',
+            'policy': policy, 'legacy_state': legacy,
             'reason': reason, 'last_replication': 'unknown (not persisted)',
             'last_verification': 'unknown (no timestamp persisted)',
-            'note': 'Persisted state is a snapshot, not a fencing proof or a durability acknowledgement.'}
+            'note': 'Persisted state is a snapshot; it does not establish replication freshness or that a missing writer has stopped.'}
 
 
 def main():

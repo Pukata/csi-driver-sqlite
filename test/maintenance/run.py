@@ -19,13 +19,6 @@ class Maintenance(e2e.Suite):
         self.k('delete', 'pod', pod['metadata']['name'], '-n', 'sqlite-csi-system', '--wait=false')
         return self.wait(description, lambda: (p := finder()) and p['metadata']['uid'] != uid and p, 300)
 
-    def locked(self, owner, epoch, allow_old=False):
-        volume = self.volume()
-        assert volume['owner'] == owner and volume['epoch'] == epoch, volume
-        ready = [p for p in self.pods('sqlite-test', 'app=sqlite-test') if self.ready(p)]
-        assert not any(not allow_old or p['spec']['nodeName'] != owner for p in ready), (
-            'replacement writer became ready while recovery was blocked', ready)
-
     def exercise(self, target_image):
         app = self.app()
         source = app['spec']['nodeName']
@@ -54,7 +47,6 @@ class Maintenance(e2e.Suite):
         self.run('helm', 'upgrade', 'sqlite-csi', str(REPO / 'charts/sqlite-csi'),
                  '--kubeconfig', str(self.kubeconfig), '--kube-context', 'kind-' + self.name,
                  '-n', 'sqlite-csi-system', '--set', 'image=' + target_image,
-                 '--set', 'failover.enabled=true', '--set', 'failover.configSecret=test-fencing',
                  '--wait', '--timeout', '300s', timeout=360)
         def runs_target(pod):
             return pod and any(c['name'] == 'driver' and c['image'] == target_image
@@ -68,35 +60,6 @@ class Maintenance(e2e.Suite):
         expected.append('after-upgrade')
         assert self.request(app, path='/integrity')['integrity'] == ['ok']
         self.wait('upgraded driver preserves fresh restored data', lambda: self.replica_records() == expected)
-
-        # Fence is initially denied; restart the controller at this boundary and
-        # again after fencing while the replica is deliberately unavailable.
-        self.fencer.hide_volume = self.volume_id
-        self.run('docker', 'network', 'disconnect', self.network_id, self.inspect(source)['Id'])
-        self.wait('fencing denied', lambda: self.volume().get('recovery', {}).get('phase') == 'fencing'
-                  and bool(self.fencer.events), 300)
-        self.locked(source, before['epoch'], allow_old=True)
-        self.restart(self.controller(), self.controller, 'controller restarted at fencing boundary')
-        self.locked(source, before['epoch'], allow_old=True)
-        self.fencer.deny = False
-        self.wait('independent fence powers off old writer', lambda: not self.inspect(source)['State']['Running'])
-        self.wait('missing replica holds fenced recovery', lambda: self.fencer.archive(self.volume_id, 'held')
-                  and self.volume().get('recovery', {}).get('phase') == 'fenced')
-        self.locked(source, before['epoch'])
-        self.restart(self.controller(), self.controller, 'controller restarted at fenced boundary')
-        target = next(n for n in self.workers if n != source)
-        self.restart(self.node_agent(target), lambda: self.node_agent(target), 'node agent restarted during blocked recovery')
-        self.locked(source, before['epoch'])
-        with self.fencer.lock:
-            self.fencer.hide_volume = None
-            self.fencer.archive(self.volume_id, 'restore')
-        replacement = self.wait('recovery resumes after repair', self.app, 300)
-        assert replacement['spec']['nodeName'] == target
-        assert self.volume()['epoch'] > before['epoch']
-        assert self.get('pv', pv_name)['metadata']['uid'] == pv['metadata']['uid']
-        assert [r[1] for r in self.request(replacement)['records']] == expected
-        assert self.request(replacement, path='/integrity')['integrity'] == ['ok']
-        self.wait('recovered records verified in a fresh restore', lambda: self.replica_records() == expected)
 
 
 def main():

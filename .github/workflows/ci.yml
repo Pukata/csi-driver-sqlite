@@ -111,7 +111,7 @@ jobs:
       - name: Assert replica correctness and measure resource use
         if: matrix.kubernetes == '1.36.4' && matrix.backend == 'shared-directory'
         run: make benchmark
-      - name: Exercise CSI storage and recovery
+      - name: Exercise single-writer storage and clean movement
         if: matrix.backend == 'shared-directory'
         env:
           KIND_NODE_IMAGE: ${{ matrix.node-image }}
@@ -123,7 +123,7 @@ jobs:
           ref: 94832bcf35f0cb3159e9f7e51b9efad590c7c993 # v0.2.0-alpha.1
           path: maintenance-baseline
           persist-credentials: false
-      - name: Exercise upgrade and interrupted recovery
+      - name: Exercise driver restart and upgrade
         if: matrix.backend == 'maintenance'
         env:
           KIND_NODE_IMAGE: ${{ matrix.node-image }}

@@ -78,8 +78,8 @@ mobility and controlled recovery, rather than horizontal scaling of a SQLite app
 - Keeps SQLite writes local; no application replication sidecar is required.
 - Uses persistent ownership, epochs and API compare-and-swap to guard handover.
 - Checks SQLite integrity and logical database contents before a clean release.
-- Refuses takeover when a final sync or a required recovery check fails.
-- Offers opt-in recovery through an independent, platform-neutral fencing API.
+- Blocks movement when final replica verification fails.
+- Keeps ownership locked after node loss; recovery is manual.
 
 One database file belongs on each volume. Store attachments and other files in
 separate application volumes. This is not a general filesystem replicator,
@@ -109,7 +109,6 @@ is exercised in CI on the versions listed in [the test guide](docs/testing.md).
 - [Resource and correctness testcases](docs/performance.md).
 - [Failure recovery and volume diagnosis](docs/failure-recovery.md).
 - [Independent backup restore](docs/independent-backup.md).
-- [Redfish fencing integration](integrations/redfish/README.md).
 - [Design walkthrough and failure evidence](docs/walkthrough.md).
 - [Release installation and maintainer procedure](docs/releases.md).
 
@@ -142,11 +141,10 @@ Use `storageClassName: sqlite-csi`, `accessModes: [ReadWriteOncePod]`, one app
 replica and the `Recreate` strategy. Mount the claim at `/data` and configure the
 application to open `/data/database.db`. See [the example](examples/sqlite.yaml).
 
-The default class requires a verified clean handover. An unreachable writer
-stays locked. Opt-in `sqlite-csi-ha` recovery additionally requires confirmed
-independent fencing and explicit acceptance of the latest-replica policy.
-Read [failure recovery](docs/failure-recovery.md) before enabling it. The
-Kubernetes control plane must also survive the failed node.
+The class requires a verified clean handover. An unreachable writer stays
+locked; there is no automatic node-loss takeover or host power control. Read
+[failure recovery](docs/failure-recovery.md) for diagnosis and manual recovery,
+including migration of legacy automatic-recovery volumes before upgrading.
 
 ## Common questions
 
@@ -165,10 +163,11 @@ usual SQLite path. Attachments belong on a separate application volume.
 
 ### What if the old node suddenly fails?
 
-The default class keeps ownership locked. Opt-in automatic recovery requires
-an independent fence that confirms the old machine is stopped and cannot
-restart. It then restores the latest valid replica; unpublished writes can be
-lost. The Kubernetes control plane and replica backend must still be available.
+Ownership stays locked, even if Kubernetes schedules a replacement Pod. An
+operator must investigate the old writer and choose a manual recovery path.
+Recent writes may be missing from the replica. See the
+[manual recovery guidance](docs/failure-recovery.md); never clear ownership to
+force a replacement to start.
 
 ## Development and tests
 
@@ -178,7 +177,7 @@ make image e2e
 ```
 
 CI runs formatting, static checks, Go race tests and coverage, Helm checks, and
-disposable multi-node Kubernetes storage/recovery scenarios. It uses GitHub-hosted
+disposable multi-node Kubernetes storage and clean-movement scenarios. It uses GitHub-hosted
 runners and does not need access to an existing cluster or private infrastructure.
 See [testing](docs/testing.md) and [contributing](CONTRIBUTING.md).
 
@@ -186,7 +185,7 @@ See [testing](docs/testing.md) and [contributing](CONTRIBUTING.md).
 
 The CSI identity is `sqlite.csi`. The interfaces and on-disk state are
 pre-release and may change. Keep workloads on a pinned, tested revision and
-validate restore and failover with disposable data before adopting an upgrade.
+validate restore and clean movement with disposable data before adopting an upgrade.
 
 Licensed under [MIT](LICENSE). Litestream and the upstream Kubernetes CSI
 sidecars retain their respective licenses. See [security](SECURITY.md) for

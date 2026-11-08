@@ -110,8 +110,8 @@ func (n *Node) target(path string) error {
 	return nil
 }
 func (n *Node) start(s *Session) error {
-	if s.ReplicaDirectory != "" && !validDatabase.MatchString(s.ReplicaDirectory) {
-		return fmt.Errorf("invalid replica directory")
+	if e := checkReplicaDirectory(s.ReplicaDirectory); e != nil {
+		return e
 	}
 	if p := n.processes[s.ID]; p != nil {
 		select {
@@ -186,8 +186,8 @@ func digest(ctx context.Context, path string) (string, error) {
 	return strings.TrimSpace(string(out)), e
 }
 func (n *Node) restore(ctx context.Context, id, directory, path string) error {
-	if directory != "" && !validDatabase.MatchString(directory) {
-		return fmt.Errorf("invalid replica directory")
+	if e := checkReplicaDirectory(directory); e != nil {
+		return e
 	}
 	tmp, e := os.MkdirTemp(filepath.Dir(path), ".restore-")
 	if e != nil {
@@ -203,40 +203,6 @@ func (n *Node) restore(ctx context.Context, id, directory, path string) error {
 	}
 	if _, e = digest(ctx, staged); e != nil {
 		return e
-	}
-	return os.Rename(staged, path)
-}
-func (n *Node) importSeed(ctx context.Context, v Volume, path string) error {
-	if !strings.HasPrefix(v.RecoverySeed, v.ID+"/recoveries/") || filepath.Clean(v.RecoverySeed) != v.RecoverySeed {
-		return fmt.Errorf("invalid recovery seed identity")
-	}
-	source := filepath.Join(n.backing, v.RecoverySeed)
-	wanted, e := digest(ctx, source)
-	if e != nil {
-		return e
-	}
-	if wanted != v.SeedDigest {
-		return fmt.Errorf("recovery seed contents changed")
-	}
-	tmp, e := os.MkdirTemp(filepath.Dir(path), ".seed-")
-	if e != nil {
-		return e
-	}
-	defer os.RemoveAll(tmp)
-	if e = os.Chown(tmp, 1000, 1000); e != nil {
-		return e
-	}
-	staged := filepath.Join(tmp, "database.db")
-	program := "import os,shutil,sys; shutil.copyfile(sys.argv[1],sys.argv[2]); f=open(sys.argv[2],'rb'); os.fsync(f.fileno()); f.close()"
-	if _, e = run(ctx, "python3", "-c", program, source, staged); e != nil {
-		return e
-	}
-	got, e := digest(ctx, staged)
-	if e != nil {
-		return e
-	}
-	if got != wanted {
-		return fmt.Errorf("local recovery import differs from verified seed")
 	}
 	return os.Rename(staged, path)
 }
@@ -267,22 +233,6 @@ func (n *Node) flush(ctx context.Context, s *Session) (bool, error) {
 	wanted, e := digest(ctx, n.database(s))
 	if e != nil {
 		return false, e
-	}
-	if s.ReadOnly {
-		v, err := n.store.Get(ctx, s.ID)
-		if err != nil {
-			return false, err
-		}
-		if v.RecoverySeed != "" && v.SeedClaimedEpoch == s.Epoch {
-			source, err := digest(ctx, filepath.Join(n.backing, v.RecoverySeed))
-			if err != nil {
-				return false, err
-			}
-			if source != v.SeedDigest || source != wanted {
-				return false, fmt.Errorf("read-only recovery seed differs from local database")
-			}
-			return true, nil
-		}
 	}
 	scratch, e := os.MkdirTemp(n.base(s.ID), "check-")
 	if e != nil {
@@ -321,15 +271,20 @@ func (n *Node) NodePublishVolume(ctx context.Context, r *csi.NodePublishVolumeRe
 	if e != nil {
 		return nil, status.Error(codes.InvalidArgument, "attachment epoch missing")
 	}
+	if s := n.sessions[r.VolumeId]; s != nil {
+		if e := checkReplicaDirectory(s.ReplicaDirectory); e != nil {
+			return nil, e
+		}
+	}
 	v, e := n.store.Edit(ctx, r.VolumeId, func(v *Volume) error {
 		if v.Owner != n.id || v.Epoch != epoch || v.Deleted {
 			return status.Error(codes.FailedPrecondition, "volume is not attached to this node and epoch")
 		}
+		if e := checkLegacyRecovery(*v); e != nil {
+			return e
+		}
 		v.Prepared = true
 		v.Clean = false
-		if v.RecoverySeed != "" && v.SeedClaimedEpoch == 0 {
-			v.SeedClaimedEpoch = epoch
-		}
 		return nil
 	})
 	if e != nil {
@@ -346,7 +301,7 @@ func (n *Node) NodePublishVolume(ctx context.Context, r *csi.NodePublishVolumeRe
 		if e = ownDir(n.base(v.ID)); e != nil {
 			return nil, e
 		}
-		s = &Session{ID: v.ID, Epoch: epoch, Database: v.Database, ReadOnly: r.Readonly, Targets: map[string]bool{}, ReplicaDirectory: replicaDirectory(v)}
+		s = &Session{ID: v.ID, Epoch: epoch, Database: v.Database, ReadOnly: r.Readonly, Targets: map[string]bool{}, ReplicaDirectory: "replica"}
 		n.sessions[v.ID] = s
 		if e = n.save(s); e != nil {
 			return nil, e
@@ -373,11 +328,7 @@ func (n *Node) NodePublishVolume(ctx context.Context, r *csi.NodePublishVolumeRe
 			return nil, e
 		}
 		if v.Initialized && !exists(n.database(s)) {
-			if v.RecoverySeed != "" && v.SeedClaimedEpoch == epoch {
-				e = n.importSeed(ctx, v, n.database(s))
-			} else {
-				e = n.restore(ctx, v.ID, s.ReplicaDirectory, n.database(s))
-			}
+			e = n.restore(ctx, v.ID, s.ReplicaDirectory, n.database(s))
 			if e != nil {
 				return nil, e
 			}
@@ -440,6 +391,17 @@ func (n *Node) NodeUnpublishVolume(ctx context.Context, r *csi.NodeUnpublishVolu
 	if e != nil {
 		return nil, e
 	}
+	// A recovered session must not resume an obsolete replication history or
+	// certify it clean, even when it still matches the persisted owner/epoch.
+	if e = checkLegacyRecovery(v); e == nil {
+		e = checkReplicaDirectory(s.ReplicaDirectory)
+	}
+	if e != nil {
+		if stopErr := n.stop(s.ID); stopErr != nil {
+			log.Printf("legacy publisher exit %s: %v", s.ID, stopErr)
+		}
+		return nil, e
+	}
 	stale := v.Owner != n.id || v.Epoch != s.Epoch
 	if stale {
 		if e = n.stop(s.ID); e != nil {
@@ -466,21 +428,14 @@ func (n *Node) NodeUnpublishVolume(ctx context.Context, r *csi.NodeUnpublishVolu
 		return nil, e
 	}
 	_, e = n.store.Edit(ctx, s.ID, func(v *Volume) error {
+		if e := checkLegacyRecovery(*v); e != nil {
+			return e
+		}
 		if v.Owner != n.id || v.Epoch != s.Epoch {
 			return status.Error(codes.FailedPrecondition, "attachment changed before clean release")
 		}
 		v.Clean = true
 		v.Initialized = v.Initialized || initialized
-		if initialized && !s.ReadOnly {
-			v.RecoverySeed = ""
-			v.SeedDigest = ""
-			v.SeedClaimedEpoch = 0
-			if v.Recovery != nil {
-				v.Recovery.Phase = "complete"
-			}
-		} else if s.ReadOnly && v.RecoverySeed != "" {
-			v.SeedClaimedEpoch = 0
-		}
 		return nil
 	})
 	if e != nil {
@@ -524,6 +479,31 @@ func (n *Node) recoverSessions() error {
 	}
 	return nil
 }
+func (n *Node) superviseSession(ctx context.Context, s *Session) {
+	if len(s.Targets) == 0 || s.ReadOnly || !s.Ready {
+		return
+	}
+	v, e := n.store.Get(ctx, s.ID)
+	if e != nil {
+		return
+	}
+	if v.Owner != n.id || v.Epoch != s.Epoch || v.Deleted {
+		log.Printf("ownership mismatch for %s; refusing replication", s.ID)
+		n.stop(s.ID)
+		return
+	}
+	if e = checkLegacyRecovery(v); e == nil {
+		e = checkReplicaDirectory(s.ReplicaDirectory)
+	}
+	if e != nil {
+		log.Printf("replica restart %s: %v", s.ID, e)
+		n.stop(s.ID)
+		return
+	}
+	if e = n.start(s); e != nil {
+		log.Printf("replica restart %s: %v", s.ID, e)
+	}
+}
 func (n *Node) supervise(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -541,21 +521,7 @@ func (n *Node) supervise(ctx context.Context) {
 		case <-ticker.C:
 			n.mu.Lock()
 			for _, s := range n.sessions {
-				if len(s.Targets) == 0 || s.ReadOnly || !s.Ready {
-					continue
-				}
-				v, e := n.store.Get(ctx, s.ID)
-				if e != nil {
-					continue
-				}
-				if v.Owner != n.id || v.Epoch != s.Epoch {
-					log.Printf("ownership mismatch for %s; refusing replication", s.ID)
-					n.stop(s.ID)
-					continue
-				}
-				if e = n.start(s); e != nil {
-					log.Printf("replica restart %s: %v", s.ID, e)
-				}
+				n.superviseSession(ctx, s)
 			}
 			n.mu.Unlock()
 		}

@@ -140,47 +140,79 @@ func TestConcurrentOwnershipCAS(t *testing.T) {
 	}
 }
 
-// A failed attempt can be retried, but the next owner must never acquire the
-// volume before power-off, a verified seed and quarantine have all succeeded.
-func TestRecoveryRetriesKeepUncleanOwnerLocked(t *testing.T) {
-	for _, failure := range []string{"fencing", "replica", "quarantine"} {
-		t.Run(failure, func(t *testing.T) {
-			r, s, c, f, _ := fixture(t)
-			prepare := r.Prepare
-			switch failure {
-			case "fencing":
-				f.err = fmt.Errorf("authority unavailable")
-			case "replica":
-				r.Prepare = func(context.Context, Volume, RecoveryRecord) (RecoveredReplica, error) {
-					return RecoveredReplica{}, fmt.Errorf("bad replica")
-				}
-			case "quarantine":
-				c.quarantineError = fmt.Errorf("API unavailable")
-			}
-			if err := r.reconcile(context.Background(), s.v, c.node); err == nil {
-				t.Fatal("failed stage accepted")
-			}
-			if s.v.Owner != c.node.Name || s.v.Epoch != 4 {
-				t.Fatalf("failed recovery changed ownership: %+v", s.v)
-			}
-			if err := acquire(&s.v, "worker-b"); err == nil {
-				t.Fatal("unclean owner displaced after failed recovery")
-			}
-			f.err = nil
-			r.Prepare = prepare
-			c.quarantineError = nil
-			if err := r.reconcile(context.Background(), s.v, c.node); err != nil {
+// A missing node never makes a dirty replica safe to hand over.
+func TestUncleanOwnerStaysLocked(t *testing.T) {
+	v := Volume{Owner: "node-a", Epoch: 7, Prepared: true}
+	for i := 0; i < 20; i++ {
+		if err := release(&v, "node-a"); err == nil {
+			t.Fatal("dirty release accepted")
+		}
+		if err := acquire(&v, "node-b"); err == nil {
+			t.Fatal("competing writer accepted")
+		}
+		if v.Owner != "node-a" || v.Epoch != 7 {
+			t.Fatalf("ownership changed: %+v", v)
+		}
+	}
+	v.Clean = true
+	if err := release(&v, "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := acquire(&v, "node-b"); err != nil {
+		t.Fatal(err)
+	}
+	if v.Owner != "node-b" || v.Epoch != 8 {
+		t.Fatalf("clean move: %+v", v)
+	}
+}
+func TestLegacyRecoveryStateRequiresMigration(t *testing.T) {
+	for _, legacy := range []string{
+		`{"recoveryPolicy":"latest-replica"}`,
+		`{"recoverySeed":"old/seed"}`,
+		`{"seedDigest":"old"}`,
+		`{"seedClaimedEpoch":7}`,
+		`{"replicaDirectory":"replica-old"}`,
+		`{"recovery":{}}`,
+		`{"recovery":{"phase":"released","proof":{"nodeUID":"old"}}}`,
+	} {
+		var v Volume
+		if err := json.Unmarshal([]byte(legacy), &v); err != nil {
+			t.Fatal(err)
+		}
+		if err := acquire(&v, "node-b"); err == nil {
+			t.Fatalf("legacy state accepted: %s", legacy)
+		}
+		if v.Owner != "" || v.Epoch != 0 {
+			t.Fatal("rejection changed ownership")
+		}
+		v.Owner, v.Prepared, v.Clean = "node-a", true, true
+		if err := release(&v, "node-a"); err == nil || v.Owner != "node-a" {
+			t.Fatal("legacy clean release accepted")
+		}
+		saved, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var roundTrip Volume
+		if err = json.Unmarshal(saved, &roundTrip); err != nil {
+			t.Fatal(err)
+		}
+		if err = checkLegacyRecovery(roundTrip); err == nil {
+			t.Fatal("legacy state lost")
+		}
+	}
+}
+
+func TestManualLegacyDefaultsRemainCompatible(t *testing.T) {
+	for _, policy := range []string{"", "manual"} {
+		for _, directory := range []string{"", "replica"} {
+			v := Volume{RecoveryPolicy: policy, ReplicaDirectory: directory, Recovery: json.RawMessage(" null ")}
+			if err := acquire(&v, "node-a"); err != nil {
 				t.Fatal(err)
 			}
-			if s.v.Owner != "" || s.v.RecoverySeed == "" || s.v.Recovery == nil || s.v.Recovery.Phase != "released" {
-				t.Fatalf("incomplete recovery: %+v", s.v)
-			}
-			if err := acquire(&s.v, "worker-b"); err != nil {
+			if err := release(&v, "node-a"); err != nil {
 				t.Fatal(err)
 			}
-			if s.v.Owner != "worker-b" || s.v.Epoch != 5 {
-				t.Fatalf("takeover: %+v", s.v)
-			}
-		})
+		}
 	}
 }
