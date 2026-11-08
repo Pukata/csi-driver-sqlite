@@ -1,4 +1,5 @@
 import copy
+import base64
 import json
 import ssl
 import subprocess
@@ -8,6 +9,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 from server import Authority, make_server
@@ -101,6 +103,47 @@ class FencingTests(unittest.TestCase):
                 token.write_text('rotated')
                 with self.assertRaises(urllib.error.HTTPError): send('test-token')
                 with send('rotated') as response: self.assertEqual(response.status,200)
+            finally:
+                server.shutdown(); server.server_close(); thread.join()
+
+    def test_outgoing_bmc_tls_auth_and_redirect_refusal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            certificate, key = root/'cert.pem', root/'key.pem'
+            subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1',
+                '-keyout',str(key),'-out',str(certificate),'-subj','/CN=localhost',
+                '-addext','subjectAltName=IP:127.0.0.1'],check=True,capture_output=True)
+            password = root/'password'; password.write_text('first')
+            seen, redirect = [], [False]
+            class BMC(BaseHTTPRequestHandler):
+                def log_message(self,*args): pass
+                def do_GET(self):
+                    seen.append(self.headers.get('Authorization'))
+                    if redirect[0]:
+                        self.send_response(302); self.send_header('Location','https://127.0.0.1:1/leak'); self.end_headers()
+                    else:
+                        body = json.dumps({'UUID':'machine','PowerRestorePolicy':'AlwaysOff','PowerState':'Off'}).encode()
+                        self.send_response(200); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+            server = ThreadingHTTPServer(('127.0.0.1',0),BMC)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(str(certificate),str(key))
+            server.socket = context.wrap_socket(server.socket,server_side=True)
+            thread = threading.Thread(target=server.serve_forever); thread.start()
+            try:
+                node = self.config['nodes']['worker']
+                node.update(endpoint='https://127.0.0.1:'+str(server.server_port),
+                            caFile=str(certificate),passwordFile=str(password))
+                authority = Authority(self.config)
+                self.assertEqual(authority.fence(self.request)['state'],'off')
+                self.assertEqual(seen[-1],'Basic '+base64.b64encode(b'fencer:first').decode())
+                password.write_text('rotated')
+                authority.fence(self.request)
+                self.assertEqual(seen[-1],'Basic '+base64.b64encode(b'fencer:rotated').decode())
+                redirect[0] = True
+                with self.assertRaises(ValueError): authority.fence(self.request)
+                redirect[0] = False
+                node['caFile'] = None
+                with self.assertRaises(urllib.error.URLError): authority.fence(self.request)
             finally:
                 server.shutdown(); server.server_close(); thread.join()
 

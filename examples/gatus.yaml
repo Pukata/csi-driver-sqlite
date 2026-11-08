@@ -41,7 +41,7 @@ spec:
       securityContext: {runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true}
       containers:
         - name: gatus
-          image: twinproduction/gatus:v5.38.0
+          image: twinproduction/gatus:v5.38.0@sha256:085ed63da963728965d00a3c78aa6167e3bf135218485b893201758e079e8415
           env: [{name: GATUS_CONFIG_PATH, value: /config/config.yaml}]
           ports: [{name: http, containerPort: 8080}]
           readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 2}

@@ -9,7 +9,7 @@ The goal here is one instance of each app that can move. It is not several
 instances writing the same SQLite file. Gatus provides a small example: its
 configuration is a ConfigMap and its monitoring history is a database PVC.
 Homebox adds a separate shared attachment volume. See the [Gatus testcase](gatus.md)
-and [Homebox migration recipe](homebox-migration.md).
+and [Homebox storage layout](homebox.md).
 
 ## Move the interface, preserve the constraints
 

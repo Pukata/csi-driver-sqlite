@@ -39,11 +39,9 @@ The Gatus case establishes clean movement for this pinned configuration. It
 does not by itself establish every app's compatibility or Gatus-specific
 sudden-failure durability. CI artifacts report each assertion.
 
-For an existing Gatus deployment, stop its writer, back up its SQLite database
-using SQLite's backup API, and import that file into the new PVC before starting
-Gatus. Keep the existing database filename consistent with the selected storage
-class. The offline backup/import and rollback procedure is described in the
-[Homebox guide](homebox-migration.md); omit its attachment steps.
+This example starts with a new database. Moving existing application data is
+outside the driver's scope; follow the application's backup/restore procedures.
+The driver does not convert existing claims or automate application migrations.
 
 Upstream references: [storage configuration](https://github.com/TwiN/gatus#storage)
 and [pinned SQLite implementation](https://github.com/TwiN/gatus/blob/v5.38.0/storage/store/sql/specific_sqlite.go).

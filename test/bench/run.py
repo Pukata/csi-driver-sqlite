@@ -7,7 +7,9 @@ import signal
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import time
+import unittest
 from pathlib import Path
 
 
@@ -50,6 +52,17 @@ def test_case(size_mib, digest_program):
         config.write_text(json.dumps({'dbs':[{'path':str(db),'replica':{'path':str(root/'replica')}}]}))
         with (root/'publisher.log').open('w') as log:
             publisher = subprocess.Popen(['litestream','replicate','-config',str(config)],stdout=log,stderr=log)
+            publisher_peak = [0]
+            monitor_stop = threading.Event()
+            def sample_publisher():
+                while not monitor_stop.wait(0.005):
+                    try:
+                        for line in Path('/proc/'+str(publisher.pid)+'/status').read_text().splitlines():
+                            if line.startswith('VmRSS:'):
+                                publisher_peak[0] = max(publisher_peak[0],int(line.split()[1])*1024)
+                    except FileNotFoundError: pass
+            monitor = threading.Thread(target=sample_publisher)
+            monitor.start()
             try:
                 def restore_until(count):
                     started = time.monotonic()
@@ -78,6 +91,10 @@ def test_case(size_mib, digest_program):
                 _, restore = measured(['litestream','restore','-o',str(target),'file://'+str(root/'replica')])
                 copy, verify = measured(['python3','-c',digest_program,str(target)])
                 assert original == copy, 'Restored logical database differs'
+                if size_mib == 1:
+                    # Preserve the digest format used by existing recovery seed metadata.
+                    expected = hashlib.sha256('\n'.join(connection.iterdump()).encode()).hexdigest()
+                    assert original == expected, 'Streaming digest changed the existing format'
                 assert digest['sampledPeakRSSBytes'] < 384*1024*1024, 'Digest exceeded regression memory budget'
                 assert verify['sampledPeakRSSBytes'] < 384*1024*1024, 'Restore verification exceeded memory budget'
                 return {'fixtureMiB':size_mib,'databaseBytes':db.stat().st_size,
@@ -86,15 +103,25 @@ def test_case(size_mib, digest_program):
             finally:
                 connection.close()
                 if publisher.poll() is None: publisher.kill(); publisher.wait()
+                monitor_stop.set(); monitor.join()
+                publisher_metrics.append({'fixtureMiB':size_mib,'sampledPeakRSSBytes':publisher_peak[0]})
 
 
 if __name__ == '__main__':
     source = Path('/src/node.go').read_text()
     program = source.split('const digestProgram = `',1)[1].split('`',1)[0]
     # Each case is a correctness/memory testcase. Timings are observations, not SLAs.
-    cases = [test_case(size,program) for size in (1,16,64)]
+    cases, publisher_metrics = [], []
+    class DatabaseTests(unittest.TestCase):
+        def test_1mib(self): cases.append(test_case(1,program))
+        def test_16mib(self): cases.append(test_case(16,program))
+        def test_64mib(self): cases.append(test_case(64,program))
+    outcome = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(DatabaseTests))
+    if not outcome.wasSuccessful(): raise SystemExit(1)
     print(json.dumps({'result':'PASS','runtime':platform.python_version(),'kernel':platform.release(),
           'architecture':platform.machine(),'litestream':subprocess.check_output(['litestream','version'],text=True).strip(),
           'driverRevision':os.environ.get('DRIVER_REVISION','unknown'),
+          'containerLimits':{'cpu':2,'memoryBytes':512*1024*1024,'temporaryFilesystemBytes':1024*1024*1024},
           'backend':'same-container temporary local filesystem; no network NAS',
-          'samplesPerSize':1,'rssSamplingIntervalSeconds':0.005,'cases':cases},indent=2))
+          'samplesPerSize':1,'rssSamplingIntervalSeconds':0.005,'cases':cases,
+          'publisherMetrics':publisher_metrics},indent=2))

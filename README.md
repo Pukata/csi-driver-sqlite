@@ -84,6 +84,8 @@ mobility and controlled recovery, rather than horizontal scaling of a SQLite app
 One database file belongs on each volume. Store attachments and other files in
 separate application volumes. This is not a general filesystem replicator,
 multi-writer SQLite cluster, or replacement for backups.
+It does not migrate existing claims or application data; application backup,
+restore and migration procedures remain outside this driver's scope.
 
 ## Requirements
 
@@ -99,7 +101,7 @@ is exercised in CI on the versions listed in [the test guide](docs/testing.md).
 ## Start here
 
 - [Gatus: one database PVC and an executable compatibility testcase](docs/gatus.md).
-- [Homebox: split database and attachment migration](docs/homebox-migration.md).
+- [Homebox: database and attachment storage layout](docs/homebox.md).
 - [Alternatives and when this driver does not fit](docs/alternatives.md).
 - [Resource and correctness testcases](docs/performance.md).
 - [Redfish fencing integration](integrations/redfish/README.md).

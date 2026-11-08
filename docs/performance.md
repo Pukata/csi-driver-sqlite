@@ -16,6 +16,9 @@ Each of the 1, 16 and 64 MiB deterministic fixtures is a testcase, with assertio
 The test records fixture/database bytes, observed initial replication plus restore
 time, commit-to-verified-restore time, restore/digest durations and sampled child
 RSS. Timing includes polling/restore work; it is not pure network replication lag.
+Publisher RSS is sampled separately for each database testcase. The Gatus
+Kubernetes case records patch-to-ready-and-verified-history time in a separate
+artifact; it includes scheduling and polling, unlike the isolated restore timings.
 RSS is sampled every 5 ms and can miss short peaks. Limits also apply to the whole
 container. A single large BLOB still makes a large SQL dump row: streaming the dump
 avoids joining the entire database into memory, not all allocations.
