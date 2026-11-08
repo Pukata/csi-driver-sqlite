@@ -190,7 +190,7 @@ class NasSuite(Suite):
             time.sleep(0.5)
         assert samples>=2
 
-    def replica_fault(self, action):
+    def replica_fault(self, action, client=None):
         """Modify only this run's volume on its disposable server's export.
 
         NAS CSI provisioners create a subdirectory under the disposable export.
@@ -228,6 +228,15 @@ else:
   assert files, 'replica history contains no files'
   for p in files: p.write_bytes(b'corrupt replica data')
 '''
+        if client is not None:
+            # Inject live write faults through the publisher's protocol mount.
+            # Mutating the server's backing directory bypasses NFS lookup/cache
+            # invalidation and can leave the client writing to the old inode.
+            assert action in ('block-write', 'repair')
+            assert client['spec']['nodeName'] in self.workers
+            self.k('exec', '-n', 'sqlite-csi-system', client['metadata']['name'],
+                   '-c', 'driver', '--', 'python3', '-c', script, self.volume_id, action)
+            return
         # Samba's forced server user differs from the controller's UID. Root in
         # this throwaway helper can modify either server's files; guards above
         # and in the script restrict all mutations to this volume's history.
@@ -388,7 +397,7 @@ def cases(s):
             self.assertEqual(before.get('replicaDirectory','replica'),'replica')
             agent = next(p for p in s.pods('sqlite-csi-system','app=sqlite-csi-node')
                          if p['spec']['nodeName']==self.original['spec']['nodeName'])
-            s.replica_fault('block-write')
+            s.replica_fault('block-write', agent)
             probe = '''import errno,os,sys
 assert os.geteuid()==0
 try:
@@ -417,7 +426,7 @@ else: raise AssertionError('replica write unexpectedly succeeded')
             s.wait('clean unpublish attempted with failed replica writes',lambda:s.k('exec','-n','sqlite-csi-system',
                 agent['metadata']['name'],'-c','driver','--','python3','-c',script)=='{}')
             s.observe_locked(before,self.original['metadata']['uid'])
-            s.replica_fault('repair')
+            s.replica_fault('repair', agent)
             replacement = s.wait('clean handover resumes after replica write repair',lambda:(p:=s.app()) and p['spec']['nodeName']==s.workers[1] and p,300)
             self.assertEqual([r[1] for r in s.request(replacement)['records']],self.expected)
             self.assertEqual(s.request(replacement,path='/integrity')['integrity'],['ok'])

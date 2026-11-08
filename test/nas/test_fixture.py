@@ -49,6 +49,23 @@ class FaultTargetTests(unittest.TestCase):
         with self.assertRaises(AssertionError): fixture.replica_fault('corrupt')
         self.assertEqual(fixture.run.call_count,1)
 
+    def test_live_write_fault_uses_only_owned_publisher_protocol_mount(self):
+        fixture, _ = self.fixture()
+        fixture.nas = Mock()
+        fixture.volume_id = 'v-'+'a'*32
+        fixture.workers = ['owned-worker']
+        fixture.k = Mock()
+        client = {'metadata': {'name': 'publisher'}, 'spec': {'nodeName': 'owned-worker'}}
+        for action in ('block-write', 'repair'):
+            fixture.replica_fault(action, client)
+            args = fixture.k.call_args.args
+            self.assertEqual(args[:8], ('exec', '-n', 'sqlite-csi-system', 'publisher', '-c', 'driver', '--', 'python3'))
+            self.assertEqual(args[-2:], (fixture.volume_id, action))
+        fixture.k.reset_mock()
+        client['spec']['nodeName'] = 'foreign-worker'
+        with self.assertRaises(AssertionError): fixture.replica_fault('block-write', client)
+        fixture.k.assert_not_called()
+
     def test_replica_fault_mutates_only_selected_history_and_repairs_it(self):
         fixture, _ = self.fixture()
         fixture.nas = Mock()
