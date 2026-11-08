@@ -199,7 +199,7 @@ class NasSuite(Suite):
         self.nas()
         assert re.fullmatch(r'v-[a-f0-9]{32}', self.volume_id)
         assert action in ('corrupt', 'incomplete', 'block-write', 'repair')
-        script = '''import pathlib,shutil,sys
+        script = '''import pathlib,shutil,sys,uuid
 root=pathlib.Path('/replicas')
 matches=[p for p in root.rglob(sys.argv[1]) if p.is_dir() and not p.is_symlink()]
 assert len(matches)==1, 'volume directory must be unique'
@@ -211,8 +211,10 @@ assert not archive.is_symlink() and not held.is_symlink()
 action=sys.argv[2]
 if action=='repair':
  assert held.is_dir() and (archive.is_dir() or archive.is_file())
- if archive.is_dir(): shutil.rmtree(archive)
- else: archive.unlink()
+ # Rename through the protocol instead of replacing files behind cached
+ # handles. Preserve damaged history for diagnosis; the old writer is fenced
+ # or its publisher is already stopped before repair.
+ archive.rename(volume/('.nas-test-damaged-'+uuid.uuid4().hex))
  held.rename(archive)
 else:
  assert archive.is_dir() and not held.exists()
@@ -368,7 +370,8 @@ def cases(s):
             with self.assertRaises(RuntimeError):
                 s.replica_records()
             s.observe_locked(before,self.original['metadata']['uid'])
-            s.replica_fault('repair')
+            s.replica_fault('repair', s.controller())
+            s.wait('repaired history visible through a fresh restore', lambda:s.replica_records()==self.expected)
             replacement = s.wait('repaired history restores to a replacement',lambda:(p:=s.app()) and p['spec']['nodeName']!=source and p,300)
             self.assertEqual([r[1] for r in s.request(replacement)['records']],self.expected)
             self.assertEqual(s.request(replacement,path='/integrity')['integrity'],['ok'])
