@@ -107,6 +107,8 @@ is exercised in CI on the versions listed in [the test guide](docs/testing.md).
 - [Homebox: database and attachment storage layout](docs/homebox.md).
 - [Alternatives and when this driver does not fit](docs/alternatives.md).
 - [Resource and correctness testcases](docs/performance.md).
+- [Failure recovery and volume diagnosis](docs/failure-recovery.md).
+- [Independent backup restore](docs/independent-backup.md).
 - [Redfish fencing integration](integrations/redfish/README.md).
 - [Design walkthrough and failure evidence](docs/walkthrough.md).
 - [Release installation and maintainer procedure](docs/releases.md).

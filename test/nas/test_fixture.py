@@ -1,5 +1,6 @@
 """Cheap fault-target guard tests, before starting any Docker/Kubernetes fixture."""
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,6 +36,44 @@ class FaultTargetTests(unittest.TestCase):
         fixture.run = Mock(return_value=json.dumps([machine]))
         with self.assertRaises(AssertionError): fixture.close_backend()
         self.assertEqual(fixture.run.call_count,1,'Cleanup removed a container outside this run')
+
+    def test_replica_fault_rejects_unowned_server_and_invalid_volume(self):
+        fixture, machine = self.fixture()
+        fixture.volume_id = 'v-'+'a'*32
+        machine['Config']['Labels'] = {}
+        fixture.run = Mock(return_value=json.dumps([machine]))
+        with self.assertRaises(AssertionError): fixture.replica_fault('corrupt')
+        self.assertEqual(fixture.run.call_count,1)
+        fixture.nas = Mock()
+        fixture.volume_id = '../outside'
+        with self.assertRaises(AssertionError): fixture.replica_fault('corrupt')
+        self.assertEqual(fixture.run.call_count,1)
+
+    def test_replica_fault_mutates_only_selected_history_and_repairs_it(self):
+        fixture, _ = self.fixture()
+        fixture.nas = Mock()
+        fixture.image = 'test-image'
+        fixture.volume_id = 'v-'+'a'*32
+        with tempfile.TemporaryDirectory() as root:
+            fixture.replicas = Path(root)
+            volume = fixture.replicas/'pvc' / fixture.volume_id
+            archive = volume/'replica'
+            archive.mkdir(parents=True)
+            (archive/'snapshot').write_bytes(b'original')
+            decoy = fixture.replicas/'unrelated'
+            decoy.write_bytes(b'untouched')
+            def run(*args):
+                script = args[args.index('-c')+1].replace("Path('/replicas')", 'Path('+repr(root)+')')
+                subprocess.run(['python3','-c',script,args[-2],args[-1]],check=True,capture_output=True)
+            fixture.run = run
+            for fault in ('corrupt','incomplete','block-write'):
+                fixture.replica_fault(fault)
+                self.assertEqual(decoy.read_bytes(),b'untouched')
+                if fault=='corrupt': self.assertNotEqual((archive/'snapshot').read_bytes(),b'original')
+                elif fault=='incomplete': self.assertEqual(list(archive.iterdir()),[])
+                else: self.assertTrue(archive.is_file())
+                fixture.replica_fault('repair')
+                self.assertEqual((archive/'snapshot').read_bytes(),b'original')
 
 
 class SmbFixtureTests(FaultTargetTests):

@@ -26,7 +26,11 @@ lints both the default chart and the opt-in fenced recovery configuration.
 
 The tests follow the standard Go `_test.go` and `testing` conventions. External
 services in unit tests use `httptest` and temporary directories; tests do not
-connect to a real cluster, storage server or fencing authority.
+connect to a real cluster, storage server or fencing authority. The ownership
+state-machine suite records a seed and trace on failure. A separate lightweight
+CI job runs `make mutation-test`: it makes temporary source copies and requires
+focused tests to reject representative ownership, epoch and fencing mutations.
+A compile or setup error does not count as detecting a mutation.
 
 ## Kubernetes scenarios
 
@@ -54,7 +58,8 @@ The scenarios exercise:
 - The real pinned Gatus example: successful monitoring rows, fresh replica
   restore, clean movement to another worker and preserved history plus new checks.
 
-`make integration-test` exercises the independent Redfish authority's protocol
+`make integration-test` exercises the read-only volume diagnostic and an isolated
+SQLite online-backup restore, the independent Redfish authority's protocol
 and refusal paths, plus fast NAS fault-target ownership guards. `make benchmark` runs three database correctness/resource
 testcases in the built image; see [measurement limits](performance.md). These
 are regression checks in CI, not optional manual experiments. Redfish BMC
@@ -63,6 +68,23 @@ responses are fixtures; physical server behavior is not established by them.
 Artifacts include a JSON scenario summary, Kubernetes events and pod/driver
 logs. Test tokens, TLS private keys and kubeconfigs are excluded from artifacts.
 Failures must be diagnosed rather than bypassed by forcing volume ownership.
+
+## Upgrade and restart exercise
+
+On Kubernetes 1.36.4, CI builds the pinned `v0.2.0-alpha.1` baseline
+(commit `94832bcf35f0cb3159e9f7e51b9efad590c7c993`) and the current image,
+then upgrades an existing volume in an isolated kind cluster. It restarts driver
+pods during replication and controller/node pods at selected blocked recovery
+boundaries; ownership, records, integrity and fresh replica restores are checked.
+This exercises that baseline-to-current transition on the shared-directory
+backend, not arbitrary versions, physical hosts or NAS failure semantics.
+
+To run locally, prepare a separate checkout at that commit and build it as
+`sqlite-csi:baseline`, build the current image with `make image`, then run
+`make maintenance-test BASELINE_REPO=/path/to/baseline`. The harness needs
+Docker, kind, Helm, kubectl and OpenSSL and creates its own cluster. Keep the
+baseline checkout outside the current Docker build context. Artifacts are
+collected under `.e2e/artifacts/`; failures do not reset ownership.
 
 ## Real NAS integration
 
@@ -78,7 +100,7 @@ The tests inspect actual worker mount types and sources to require NFSv4.1;
 there is no shared host-directory mount into the Kubernetes nodes in this suite.
 Only the NAS container sees the persistent export directory directly.
 
-The SMB variant runs the same four cases against a separate Samba container and
+The SMB variant runs the same seven cases against a separate Samba container and
 the upstream `smb.csi.k8s.io` chart 1.19.1, with a checksum-checked archive. It
 checks the CIFS mount type and server source on both workers. The disposable
 share uses a fresh per-run password held in a private file and a Kubernetes Secret;
@@ -88,7 +110,7 @@ fixture. The Linux host must provide the CIFS kernel module; CI loads it before
 running this variant.
 
 One cluster is reused, with a new application PVC and independent baseline records
-for each of four named unittest cases. It stops after the first failed case rather
+for each of seven named unittest cases. It stops after the first failed case rather
 than manufacturing a healthy fixture by resetting ownership. Every case verifies
 actual database records through a fresh Litestream restore, not just Pod readiness.
 
@@ -98,6 +120,9 @@ actual database records through a fresh Litestream restore, not just Pod readine
 | NAS disconnected during planned movement | Local commits still work; an observed unpublish cannot release ownership without verification; reconnect permits the move and preserves those commits |
 | Worker partitioned while NAS is available | Independent fencing stops it; the same PV recovers elsewhere; returning worker is audited before deliberate rejoin |
 | Worker fails while NAS is disconnected | Fencing still works; ownership stays locked and no replacement writer becomes ready until the NAS returns; recovery retains verified baseline records |
+| Corrupt replica history | A fresh restore fails and ownership remains locked until the original history is repaired |
+| Incomplete replica history | A fresh restore fails and ownership remains locked until the original history is repaired |
+| Replica path obstructed | A write through the mounted share fails; unpublish remains locked until the original history is restored, then a clean handover retains local commits |
 
 The combined-failure case acknowledges a local write during the NAS outage.
 Preservation of that unpublished write is deliberately not promised; the known
@@ -121,6 +146,9 @@ period. These fixture settings keep CI bounded and are not recommended NAS polic
 Actual NFS server packages are recorded with the result. The base image and chart
 archive are pinned; this does not certify a vendor NAS firmware, SMB authentication or root-squash
 policy, physical power-loss durability, or a Kubernetes control-plane outage.
+The incomplete-history case uses an empty history rather than a partially
+published WAL. The write failure uses a path obstruction; it does not simulate
+ENOSPC or failure of an entire share.
 
 ## What these tests do not establish
 

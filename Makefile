@@ -1,6 +1,7 @@
-.PHONY: fmt verify test build chart image e2e integration-test benchmark nas-image nas-test smb-image smb-test
+.PHONY: fmt verify test build chart image e2e integration-test benchmark nas-image nas-test smb-image smb-test maintenance-test mutation-test
 
 IMAGE ?= sqlite-csi:e2e
+BASELINE_IMAGE ?= sqlite-csi:baseline
 
 fmt:
 	gofmt -w *.go
@@ -27,7 +28,15 @@ image:
 e2e:
 	python3 test/e2e/run.py --image $(IMAGE)
 
+mutation-test:
+	python3 test/ownership/mutations.py
+
+maintenance-test:
+	test -n "$(BASELINE_REPO)"
+	python3 test/maintenance/run.py --baseline-repo "$(BASELINE_REPO)" --baseline-image "$(BASELINE_IMAGE)" --image "$(IMAGE)"
+
 integration-test:
+	python3 -m unittest discover -s tools -p 'test_*.py' -v
 	python3 -m unittest discover -s integrations/redfish -p 'test_*.py' -v
 	python3 -m unittest discover -s test/nas -p 'test_*.py' -v
 

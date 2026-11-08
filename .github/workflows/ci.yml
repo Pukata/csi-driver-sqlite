@@ -46,10 +46,23 @@ jobs:
           path: coverage.out
           if-no-files-found: ignore
 
+  mutations:
+    name: Ownership mutation checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - run: make mutation-test
+
   kubernetes:
     name: Kubernetes ${{ matrix.kubernetes }} (${{ matrix.backend }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +74,10 @@ jobs:
           - kubernetes: '1.36.4'
             backend: shared-directory
             artifact: kubernetes-1.36.4
+            node-image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+          - kubernetes: '1.36.4'
+            backend: maintenance
+            artifact: maintenance-1.36.4
             node-image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
           - kubernetes: '1.36.4'
             backend: nfs
@@ -103,6 +120,21 @@ jobs:
         env:
           KIND_NODE_IMAGE: ${{ matrix.node-image }}
         run: make e2e
+      - name: Check out pinned upgrade baseline
+        if: matrix.backend == 'maintenance'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: 94832bcf35f0cb3159e9f7e51b9efad590c7c993 # v0.2.0-alpha.1
+          path: maintenance-baseline
+          persist-credentials: false
+      - name: Exercise upgrade and interrupted recovery
+        if: matrix.backend == 'maintenance'
+        env:
+          KIND_NODE_IMAGE: ${{ matrix.node-image }}
+        run: |
+          mv maintenance-baseline "$RUNNER_TEMP/sqlite-csi-baseline"
+          docker build -t sqlite-csi:baseline "$RUNNER_TEMP/sqlite-csi-baseline"
+          make maintenance-test BASELINE_REPO="$RUNNER_TEMP/sqlite-csi-baseline"
       - name: Exercise real NAS integration boundaries
         if: matrix.backend == 'nfs'
         env:

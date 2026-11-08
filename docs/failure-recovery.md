@@ -127,3 +127,40 @@ Automatic recovery also requires a surviving Kubernetes control plane and a
 reachable replica backend. A single-server cluster cannot reschedule workloads
 when its only server fails. Read [test coverage and limits](testing.md); passing
 container-based worker tests does not prove physical-host or backend durability.
+
+## Operator diagnosis and manual recovery
+
+Read the PV's `spec.csi.volumeHandle` to obtain the volume ID, then run
+`python3 tools/volume-status.py -n <driver-namespace> <volume-id>`. The command
+only reads the corresponding ConfigMap using your current kubectl context and
+requires permission to get that ConfigMap. Supply `--context <name>` to select
+an explicit context. To inspect a captured ConfigMap JSON
+without cluster access, use `--file <path>`. Do not share captured state without
+reviewing it. The report is a point-in-time snapshot: the controller does not
+persist the last replication time, verification time or error reason. A
+`fencing` phase can indicate an identity or authority failure; `fenced` can
+indicate restore or quarantine failure. Consult the controller logs for the
+actual error, verify its current context, and rerun the report. Neither a phase
+nor an old proof establishes the machine is currently fenced. Never infer
+replication freshness from a successful SQLite commit.
+
+For the default manual policy, leave the owner locked after an unclean failure.
+Independently stop the old machine and inhibit restart; verify the mapping of
+node name, Kubernetes UID and physical machine, and retain the evidence. If it
+can be safely returned to service, investigate it under quarantine and recover
+through a normal clean handover after fixing the cause. If it cannot, the driver
+has no documented manual procedure for safely releasing that existing owner.
+Follow the [independent backup guidance](independent-backup.md) after fencing;
+its proposed new-volume import still requires application-specific validation. Do not patch ownership, epochs, recovery fields or
+replica paths to force a takeover. Automatic recovery is opt-in per volume;
+enabling fencing does not convert existing manual volumes.
+
+For rejoin, first independently verify the old writer cannot restart, and
+preserve its local database and old replica history. Inspect the recovered
+workload and confirm the old application containers, mounts and publishers are
+removed. Compare the current node UID and immutable machine identity with the
+fencing authority's mapping; a recreated Node or replaced host requires a
+controlled mapping update before future automatic fencing. Only after the old
+workload cannot write and the current recovery is understood should an operator
+remove the out-of-service taint, uncordon and permit the host to rejoin according
+to the site's fencing procedure. Do not copy stale data onto the new writer.
