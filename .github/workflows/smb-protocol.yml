@@ -1,0 +1,30 @@
+name: SMB protocol
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['smb-protocol-ci-*']
+
+permissions:
+  contents: read
+
+jobs:
+  smb-protocol:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: {persist-credentials: false}
+      - name: Build SMB protocol image
+        run: make smb-protocol-image
+      - name: Run fixture guards and protocol cases
+        run: make smb-protocol-test
+      - name: Upload SMB protocol results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smb-protocol-results
+          path: .e2e/artifacts/smb-protocol-*/
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7

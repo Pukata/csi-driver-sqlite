@@ -4,10 +4,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from run import NasSuite
-from smb import SmbSuite
 
 
 class FaultTargetTests(unittest.TestCase):
@@ -93,46 +92,6 @@ class FaultTargetTests(unittest.TestCase):
                 self.assertEqual((archive/'snapshot').read_bytes(),b'original')
 
 
-class SmbFixtureTests(FaultTargetTests):
-    def fixture(self):
-        fixture, machine = super().fixture()
-        fixture.__class__ = SmbSuite
-        return fixture, machine
 
-    def test_password_removed_when_backend_cleanup_fails(self):
-        fixture, _ = self.fixture()
-        with tempfile.TemporaryDirectory() as root:
-            fixture.root = Path(root)
-            credential = fixture.root/'smb-password'
-            credential.write_text('disposable-test-secret')
-            with patch.object(NasSuite, 'close', side_effect=RuntimeError('cleanup failed')):
-                with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
-                    fixture.close()
-            self.assertFalse(credential.exists())
-
-    def test_mount_accepts_cifs_share_and_subdirectory(self):
-        fixture, _ = self.fixture()
-        fixture.nas_ip = '172.18.0.3'
-        for source in ('//172.18.0.3/replicas', '//172.18.0.3/replicas/pvc-123', '//172.18.0.3/replicas[/pvc-123]'):
-            with self.subTest(source=source):
-                fixture.check_mount('cifs '+source)
-
-    def test_mount_rejects_host_directory_wrong_server_and_similar_share(self):
-        fixture, _ = self.fixture()
-        fixture.nas_ip = '172.18.0.3'
-        for mount in ('ext4 /dev/sda1[/shared]', 'cifs //172.18.0.4/replicas',
-                      'cifs //172.18.0.3/replicas-other', 'nfs4 172.18.0.3:/replicas'):
-            with self.subTest(mount=mount), self.assertRaises(AssertionError):
-                fixture.check_mount(mount)
-
-    def test_backend_rejects_wrong_driver(self):
-        fixture, _ = self.fixture()
-        fixture.nas_ip = '172.18.0.3'
-        fixture.get = Mock(side_effect=[{'spec':{'volumeName':'pv'}},
-            {'spec':{'csi':{'driver':'nfs.csi.k8s.io',
-                            'volumeAttributes':{'source':'//172.18.0.3/replicas'}}}}])
-        with self.assertRaises(AssertionError):
-            fixture.verify_backend()
-
-
-if __name__=='__main__': unittest.main()
+if __name__ == '__main__':
+    unittest.main()

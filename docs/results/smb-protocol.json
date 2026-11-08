@@ -1,0 +1,49 @@
+{
+  "environment": "Historical runs: pve2 CT 991, local Docker; retained k3s-test cluster untouched",
+  "scope": "SMB3 userspace protocol failure modes",
+  "runs": [
+    {
+      "run": 4,
+      "tests": 8,
+      "seconds": 24.464,
+      "testSourceSHA256": "8c7c7efd6e8d82b2fed76b1a4425d2705e7e0900895de365e3a8552c20fc60eb",
+      "imageID": "sha256:954de073642eb85244e06ca524ed0720e1d3ab8599967d579e5cd9d3c442b97d",
+      "packages": "samba\t2:4.22.11+dfsg-0+deb13u1\nsmbclient\t2:4.22.11+dfsg-0+deb13u1"
+    },
+    {
+      "run": 5,
+      "tests": 8,
+      "seconds": 24.333,
+      "testSourceSHA256": "8c7c7efd6e8d82b2fed76b1a4425d2705e7e0900895de365e3a8552c20fc60eb",
+      "imageID": "sha256:954de073642eb85244e06ca524ed0720e1d3ab8599967d579e5cd9d3c442b97d",
+      "packages": "samba\t2:4.22.11+dfsg-0+deb13u1\nsmbclient\t2:4.22.11+dfsg-0+deb13u1"
+    },
+    {
+      "run": 6,
+      "tests": 8,
+      "seconds": 24.359,
+      "testSourceSHA256": "8c7c7efd6e8d82b2fed76b1a4425d2705e7e0900895de365e3a8552c20fc60eb",
+      "imageID": "sha256:954de073642eb85244e06ca524ed0720e1d3ab8599967d579e5cd9d3c442b97d",
+      "packages": "samba\t2:4.22.11+dfsg-0+deb13u1\nsmbclient\t2:4.22.11+dfsg-0+deb13u1"
+    }
+  ],
+  "ci": "not run; old SMB CI job removed",
+  "limits": [
+    "Not kernel CIFS/CSI/SQLite/fencing validation",
+    "Restart is clean server restart, not physical power loss",
+    "Reset and timeout are injected during negotiation"
+  ],
+  "cleanup": "Historical runs: all test containers, networks and credential files absent after runs",
+  "currentHarnessRun": {
+    "environment": "in-agent-homelab, local Docker",
+    "result": "PASS",
+    "tests": 8,
+    "seconds": 30.053,
+    "testSourceSHA256": "d91bd1d2782d2c28bb1e15a9b524fe5d0f37d4b6e7b97c8689156a539548cfb1",
+    "imageID": "sha256:d20a9bfc38cd6da552e6d3d50ea2a134792074f76e3b8d01518f3be0bbca770a",
+    "packages": "samba\t2:4.22.11+dfsg-0+deb13u1\nsmbclient\t2:4.22.11+dfsg-0+deb13u1",
+    "change": "Client rejects Docker start failures, non-exited state, OOM and runtime errors.",
+    "cleanup": "No containers or networks with this run label; credential files absent.",
+    "artifact": ".e2e/artifacts/smb-protocol-6b262779/result.json"
+  }
+}

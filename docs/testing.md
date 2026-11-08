@@ -11,7 +11,7 @@ infrastructure. The repository remains experimental even when CI is green.
 | Unit | Ownership/epoch rules, guarded state transitions, recovery refusal | Go matrix, every PR/push |
 | Component/integration | TLS fencing protocol and refusal paths, fault-target ownership guards, real SQLite/Litestream correctness/resource tests | Fast checks and one resource job |
 | Cluster end-to-end | Kubernetes scheduling, CSI mounts, real process termination, stale worker return, Gatus compatibility | Two Kubernetes versions |
-| NAS integration/end-to-end | Real NFS and SMB CSI provisioning/mounts and NAS/worker fault boundaries | One pinned Kubernetes version |
+| NAS integration/end-to-end | Real NFS CSI provisioning/mounts and NAS/worker fault boundaries | One pinned Kubernetes version |
 
 Keep policy combinations in unit tests. The expensive suites cover crossings
 between real components, with bounded waits for observable outcomes. They do
@@ -90,7 +90,6 @@ collected under `.e2e/artifacts/`; failures do not reset ownership.
 
 ```sh
 make image nas-image nas-test
-make image smb-image smb-test
 ```
 
 This suite uses a separate userspace NFS-Ganesha container outside a three-node
@@ -100,14 +99,6 @@ The tests inspect actual worker mount types and sources to require NFSv4.1;
 there is no shared host-directory mount into the Kubernetes nodes in this suite.
 Only the NAS container sees the persistent export directory directly.
 
-The SMB variant runs the same seven cases against a separate Samba container and
-the upstream `smb.csi.k8s.io` chart 1.19.1, with a checksum-checked archive. It
-checks the CIFS mount type and server source on both workers. The disposable
-share uses a fresh per-run password held in a private file and a Kubernetes Secret;
-the server publishes no host port. Credentials are excluded from
-the collected artifacts. SMB3, strict caching and `noserverino` are selected for the
-fixture. The Linux host must provide the CIFS kernel module; CI loads it before
-running this variant.
 
 One cluster is reused, with a new application PVC and independent baseline records
 for each of seven named unittest cases. It stops after the first failed case rather
@@ -144,7 +135,7 @@ and publishes no host port. Clients use **hard** mounts with shortened retransmi
 timers and disabled attribute caching; the server retains a ten-second lease/grace
 period. These fixture settings keep CI bounded and are not recommended NAS policy.
 Actual NFS server packages are recorded with the result. The base image and chart
-archive are pinned; this does not certify a vendor NAS firmware, SMB authentication or root-squash
+archive are pinned; this does not certify a vendor NAS firmware or root-squash
 policy, physical power-loss durability, or a Kubernetes control-plane outage.
 The incomplete-history case uses an empty history rather than a partially
 published WAL. The write failure uses a path obstruction; it does not simulate
@@ -171,3 +162,33 @@ and [GitHub's Go CI guide](https://docs.github.com/en/actions/tutorials/build-an
 version matrices, race tests, bounded jobs, multi-node disposable clusters and
 failure artifacts. It is a small project-specific workflow, not a copy of the
 upstreams' full test infrastructure.
+
+## SMB protocol failure modes
+
+```sh
+make smb-protocol-image smb-protocol-test
+```
+
+This replacement uses a disposable Samba server and fresh `smbclient` processes
+speaking SMB3. Clients have all Linux capabilities dropped. It needs Docker and
+Python, with no Kubernetes setup, kernel filesystem mount or production shares.
+Per-run credentials are passed in private files and removed even on test failure.
+Cleanup checks exact Docker identities and run labels before removing resources.
+
+The cases cover byte-for-byte file transfer, rejected credentials, a missing
+share, denied writes through a read-only share (including an absent-file check),
+TCP reset, negotiation timeout, server unavailability, and file contents surviving
+a clean Samba restart. Reset and timeout peers accept a request before injecting
+the fault. Assertions require specific SMB status codes or the explicit
+negotiation-timeout diagnostic; an arbitrary command failure cannot pass.
+
+The old SMB Kubernetes/NAS failure suite and its automatic CI matrix entry were
+removed. The separate SMB protocol workflow runs by manual dispatch or by pushing
+an `smb-protocol-ci-*` tag. Validate locally first and obtain fresh operator
+approval before triggering or rerunning it.
+It does not validate kernel CIFS cache/reconnect behavior, CSI ownership, fencing,
+SQLite replication, interrupted file-transfer recovery or physical power-loss
+durability. Those claims require separate tests. Results record the image ID,
+Samba/client package versions, test-source digest and protocol observations under
+`.e2e/artifacts/`. The [smbclient manual](https://www.samba.org/samba/docs/current/man-html/smbclient.1.html)
+describes the authentication-file and timeout options.

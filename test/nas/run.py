@@ -166,7 +166,7 @@ class NasSuite(Suite):
         except Exception: pass
         try:
             for pod in self.get('pods','-n','kube-system')['items']:
-                if not any(plugin in c['image'] for c in pod['spec']['containers'] for plugin in ('nfsplugin','smbplugin')): continue
+                if not any('nfsplugin' in c['image'] for c in pod['spec']['containers']): continue
                 for container in pod['spec']['containers']:
                     try:
                         log = self.k('logs','-n','kube-system',pod['metadata']['name'],'-c',container['name'],'--tail=200')
@@ -244,9 +244,7 @@ else:
             self.k('exec', '-n', 'sqlite-csi-system', client['metadata']['name'],
                    '-c', 'driver', '--', 'python3', '-c', script, self.volume_id, action)
             return
-        # Samba's forced server user differs from the controller's UID. Root in
-        # this throwaway helper can modify either server's files; guards above
-        # and in the script restrict all mutations to this volume's history.
+        # Guards restrict this helper to the owned test export and volume.
         self.run('docker','run','--rm','--pull=never','--network=none','--user=0:0',
                  '--read-only','--mount','type=bind,src='+str(self.replicas)+',dst=/replicas',
                  '--entrypoint=python3',self.image,'-c',script,self.volume_id,action)
@@ -354,8 +352,7 @@ def cases(s):
             source_ip = s.inspect(source)['NetworkSettings']['Networks'][s.name]['IPAddress']
             # Keep recovery denied while simulating an abrupt worker crash and
             # damaging its published history through the surviving NAS client.
-            # Out-of-band server mutations can leave stale NFS handles or SMB
-            # file caches, testing the fixture rather than recovery from damage.
+            # Protocol-based faults preserve the NFS client's metadata view.
             s.fencer.deny = True
             s.run('docker','network','disconnect',s.network_id,s.inspect(source)['Id'])
             s.run('docker','kill','--signal=KILL',s.inspect(source)['Id'])
@@ -377,7 +374,7 @@ def cases(s):
                            for line in log.splitlines())
             controller = s.controller()
             self.assertIsNotNone(controller)
-            port = 445 if hasattr(s, 'check_mount') else 2049
+            port = 2049
             probe = 'import socket; socket.create_connection(('+repr(s.nas_ip)+','+str(port)+'),timeout=3).close()'
             s.wait('NAS listener reachable from controller',lambda:s.k('exec','-n','sqlite-csi-system',
                 controller['metadata']['name'],'-c','driver','--','python3','-c',probe) is not None)

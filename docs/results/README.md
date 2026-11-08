@@ -1,5 +1,19 @@
 # Recorded testcase results
 
+## SMB protocol failure modes
+
+The former SMB Kubernetes/NAS suite and its automatic CI job were removed.
+The replacement speaks SMB3 with Samba and userspace `smbclient`: file round-trip,
+failed authentication, missing/read-only shares, reset, timeout, unavailable
+server, and contents surviving a clean server restart.
+
+Eight cases passed in three consecutive local runs of the earlier harness, and
+once after its Docker failure checks were added. Digests, image IDs, package
+versions, scope and cleanup evidence are in [smb-protocol.json](smb-protocol.json).
+The separate GitHub Actions workflow can be dispatched manually or triggered by
+an `smb-protocol-ci-*` tag; either requires fresh operator approval. These protocol
+checks make no kernel CIFS, CSI, SQLite, fencing or physical-durability claim.
+
 ## Real NFS recovery
 
 Source: `a755090fb2a637df2631cc0a47d773408090aaa3`.
