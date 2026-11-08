@@ -91,6 +91,7 @@ restore and migration procedures remain outside this driver's scope.
 
 Use Linux Kubernetes nodes with local storage, privileged CSI node agents, and
 a shared RWX replica PVC. The current application UID and GID are **1000**.
+Local storage can be an HDD or SSD; no particular disk technology is required.
 The backing filesystem must support the file operations Litestream requires;
 test your storage backend before trusting it with data.
 

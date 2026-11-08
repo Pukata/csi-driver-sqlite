@@ -10,6 +10,8 @@ The end-to-end harness creates its own kind cluster and kubeconfig; never point
 fault injection at an existing cluster. Keep test credentials out of Git.
 Run `make integration-test` for Redfish authority changes and `make image benchmark`
 for resource/digest changes. Keep application migration tooling outside this project.
+Run `make image nas-image nas-test` for changes to NAS fixtures or backend recovery.
+The NAS suite creates its own NFS server and cluster; never substitute an existing NAS.
 
 For AI-assisted commits, retain the human author and add a `Co-authored-by`
 trailer identifying the AI tool and model when independently confirmed. Do not

@@ -119,6 +119,22 @@ with tempfile.TemporaryDirectory() as d:
         assert pod
         return json.loads(self.k('exec', '-n', 'sqlite-csi-system', pod['metadata']['name'], '-c', 'driver', '--', 'python3', '-c', script))
 
+    def node_mounts(self):
+        return [{'hostPath':str(self.replicas),'containerPath':'/shared-replicas'}]
+
+    def configure_backing(self):
+        self.apply({'apiVersion':'v1','kind':'PersistentVolume','metadata':{'name':'sqlite-test-backing'},
+                    'spec':{'capacity':{'storage':'5Gi'},'accessModes':['ReadWriteMany'],'storageClassName':'',
+                            'persistentVolumeReclaimPolicy':'Retain','hostPath':{'path':'/shared-replicas','type':'Directory'},
+                            'claimRef':{'namespace':'sqlite-csi-system','name':'sqlite-csi-replicas'}}})
+        self.apply({'apiVersion':'v1','kind':'PersistentVolumeClaim',
+                    'metadata':{'name':'sqlite-csi-replicas','namespace':'sqlite-csi-system'},
+                    'spec':{'volumeName':'sqlite-test-backing','storageClassName':'','accessModes':['ReadWriteMany'],
+                            'resources':{'requests':{'storage':'5Gi'}}}})
+
+    def close_backend(self):
+        pass
+
     def setup(self):
         existing = self.run('kind', 'get', 'clusters').splitlines()
         assert self.name not in existing
@@ -137,7 +153,7 @@ with tempfile.TemporaryDirectory() as d:
         self.network_id = self.run('docker', 'network', 'create', '--subnet', str(subnet), '--gateway', self.gateway,
                                    '--label', 'sqlite-csi.e2e='+self.name, self.name)
         config = {'kind':'Cluster', 'apiVersion':'kind.x-k8s.io/v1alpha4', 'networking':{'ipFamily':'ipv4'},
-                  'nodes':[{'role':role,'extraMounts':[{'hostPath':str(self.replicas),'containerPath':'/shared-replicas'}]}
+                  'nodes':[{'role':role,'extraMounts':self.node_mounts()}
                            for role in ('control-plane','worker','worker')]}
         config_path = self.root/'kind.json'
         config_path.write_text(json.dumps(config))
@@ -179,14 +195,7 @@ with tempfile.TemporaryDirectory() as d:
         for namespace in ('sqlite-csi-system','sqlite-test'):
             self.apply({'apiVersion':'v1','kind':'Namespace','metadata':{'name':namespace,
                         'labels':{'pod-security.kubernetes.io/enforce':'privileged'}}})
-        self.apply({'apiVersion':'v1','kind':'PersistentVolume','metadata':{'name':'sqlite-test-backing'},
-                    'spec':{'capacity':{'storage':'5Gi'},'accessModes':['ReadWriteMany'],'storageClassName':'',
-                            'persistentVolumeReclaimPolicy':'Retain','hostPath':{'path':'/shared-replicas','type':'Directory'},
-                            'claimRef':{'namespace':'sqlite-csi-system','name':'sqlite-csi-replicas'}}})
-        self.apply({'apiVersion':'v1','kind':'PersistentVolumeClaim',
-                    'metadata':{'name':'sqlite-csi-replicas','namespace':'sqlite-csi-system'},
-                    'spec':{'volumeName':'sqlite-test-backing','storageClassName':'','accessModes':['ReadWriteMany'],
-                            'resources':{'requests':{'storage':'5Gi'}}}})
+        self.configure_backing()
         self.k('create','secret','generic','test-fencing','-n','sqlite-csi-system',
                '--from-file=ca.pem='+str(certificate),'--from-file=token='+str(token_path),
                '--from-literal=config.json='+json.dumps(config))
@@ -388,6 +397,7 @@ with tempfile.TemporaryDirectory() as directory:
         if self.created:
             assert self.name.startswith('sqlite-csi-e2e-')
             self.run('kind','delete','cluster','--name',self.name,'--kubeconfig',str(self.kubeconfig))
+        self.close_backend()
         if self.network_id:
             networks=[json.loads(line) for line in self.run('docker','network','ls','--format','json').splitlines()]
             if any(n['ID']==self.network_id or self.network_id.startswith(n['ID']) for n in networks):

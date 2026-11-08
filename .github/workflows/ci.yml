@@ -47,7 +47,7 @@ jobs:
           if-no-files-found: ignore
 
   kubernetes:
-    name: Kubernetes ${{ matrix.kubernetes }}
+    name: Kubernetes ${{ matrix.kubernetes }} (${{ matrix.backend }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -55,8 +55,16 @@ jobs:
       matrix:
         include:
           - kubernetes: '1.35.8'
+            backend: shared-directory
+            artifact: kubernetes-1.35.8
             node-image: kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
           - kubernetes: '1.36.4'
+            backend: shared-directory
+            artifact: kubernetes-1.36.4
+            node-image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+          - kubernetes: '1.36.4'
+            backend: nfs
+            artifact: nas-integration-1.36.4
             node-image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -84,17 +92,23 @@ jobs:
           echo "$tools" >> "$GITHUB_PATH"
       - run: make chart image
       - name: Assert replica correctness and measure resource use
-        if: matrix.kubernetes == '1.36.4'
+        if: matrix.kubernetes == '1.36.4' && matrix.backend == 'shared-directory'
         run: make benchmark
       - name: Exercise CSI storage and recovery
+        if: matrix.backend == 'shared-directory'
         env:
           KIND_NODE_IMAGE: ${{ matrix.node-image }}
         run: make e2e
+      - name: Exercise real NAS integration boundaries
+        if: matrix.backend == 'nfs'
+        env:
+          KIND_NODE_IMAGE: ${{ matrix.node-image }}
+        run: make nas-image nas-test
       - name: Upload Kubernetes logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: kubernetes-${{ matrix.kubernetes }}
+          name: ${{ matrix.artifact }}
           path: .e2e/artifacts/
           if-no-files-found: ignore
           retention-days: 7

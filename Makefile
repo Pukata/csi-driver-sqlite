@@ -1,4 +1,4 @@
-.PHONY: fmt verify test build chart image e2e integration-test benchmark
+.PHONY: fmt verify test build chart image e2e integration-test benchmark nas-image nas-test
 
 IMAGE ?= sqlite-csi:e2e
 
@@ -29,6 +29,13 @@ e2e:
 
 integration-test:
 	python3 -m unittest discover -s integrations/redfish -p 'test_*.py' -v
+	python3 -m unittest discover -s test/nas -p 'test_*.py' -v
+
+nas-image:
+	docker build -f test/nas/Dockerfile -t sqlite-csi-nas:e2e .
+
+nas-test:
+	python3 test/nas/run.py --image $(IMAGE)
 
 benchmark:
 	mkdir -p .e2e/artifacts .e2e/bench-work

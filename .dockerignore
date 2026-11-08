@@ -11,5 +11,6 @@ hack
 coverage.out
 
 .e2e
-test
+test/bench
+test/e2e
 coverage.out

@@ -1,0 +1,323 @@
+"""Real NFS integration tests; faults target only this run's Docker objects."""
+import argparse
+import copy
+import hashlib
+import importlib.util
+import json
+import os
+import socket
+import sys
+import time
+import unittest
+import urllib.request
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'e2e'))
+_spec = importlib.util.spec_from_file_location('sqlite_csi_e2e',Path(__file__).resolve().parents[1]/'e2e/run.py')
+_e2e = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_e2e)
+Suite, REPO = _e2e.Suite, _e2e.REPO
+
+NFS_CHART = 'https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/v4.13.5/charts/v4.13.5/csi-driver-nfs-4.13.5.tgz'
+NFS_CHART_SHA256 = 'aace8754451ecbd87e090ec29e6cbffcf88dbd9980cecb165da8b9d0880f7fac'
+
+
+class NasSuite(Suite):
+    def __init__(self, image, nas_image):
+        super().__init__(image)
+        self.nas_image = nas_image
+        self.nas_id = None
+        self.nas_ip = None
+        self.disconnected = False
+
+    def node_mounts(self):
+        return []  # There must be no host-directory bypass around NFS.
+
+    def nas(self):
+        machine = json.loads(self.run('docker','inspect',self.nas_id))[0]
+        assert machine['Id'] == self.nas_id
+        assert machine['Config']['Labels'].get('sqlite-csi.nas-test') == self.name
+        assert machine['HostConfig']['RestartPolicy']['Name'] == 'no'
+        return machine
+
+    def configure_backing(self):
+        state = self.root/'nas-state'
+        state.mkdir()
+        self.nas_id = self.run('docker','run','-d','--name',self.name+'-nas','--network',self.name,
+            '--label','sqlite-csi.nas-test='+self.name,'--restart=no','--privileged',
+            '--mount','type=bind,src='+str(self.replicas)+',dst=/export',
+            '--mount','type=bind,src='+str(state)+',dst=/var/lib/nfs/ganesha',self.nas_image)
+        self.nas_ip = self.nas()['NetworkSettings']['Networks'][self.name]['IPAddress']
+        def listening():
+            try:
+                with socket.create_connection((self.nas_ip,2049),timeout=1): return True
+            except OSError: return False
+        self.wait('independent NAS NFS listener ready',listening,30)
+        archive = self.root/'nfs-chart.tgz'
+        with urllib.request.urlopen(NFS_CHART,timeout=30) as response:
+            payload = response.read(2*1024*1024)
+        assert hashlib.sha256(payload).hexdigest() == NFS_CHART_SHA256
+        archive.write_bytes(payload)
+        self.run('helm','upgrade','--install','nfs-test',str(archive),
+            '--kubeconfig',str(self.kubeconfig),'--kube-context','kind-'+self.name,
+            '-n','kube-system','--set','controller.replicas=1','--wait','--timeout','240s')
+        self.apply({'apiVersion':'storage.k8s.io/v1','kind':'StorageClass','metadata':{'name':'test-nas'},
+            'provisioner':'nfs.csi.k8s.io','parameters':{'server':self.nas_ip,'share':'/replicas','mountPermissions':'0777'},
+            'reclaimPolicy':'Retain','volumeBindingMode':'Immediate',
+            'mountOptions':['nfsvers=4.1','hard','timeo=10','retrans=2','actimeo=0']})
+        self.apply({'apiVersion':'v1','kind':'PersistentVolumeClaim',
+            'metadata':{'name':'sqlite-csi-replicas','namespace':'sqlite-csi-system'},
+            'spec':{'storageClassName':'test-nas','accessModes':['ReadWriteMany'],
+                    'resources':{'requests':{'storage':'5Gi'}}}})
+
+    def verify_topology(self):
+        claim = self.get('pvc','sqlite-csi-replicas','-n','sqlite-csi-system')
+        pv = self.get('pv',claim['spec']['volumeName'])
+        assert pv['spec']['csi']['driver']=='nfs.csi.k8s.io'
+        assert pv['spec']['csi']['volumeAttributes']['server']==self.nas_ip
+        for node in self.workers:
+            agent = self.wait('NFS-backed node agent Ready: '+node,lambda:next((p for p in self.pods(
+                'sqlite-csi-system','app=sqlite-csi-node') if p['spec']['nodeName']==node and self.ready(p)),None))
+            mount = self.k('exec','-n','sqlite-csi-system',agent['metadata']['name'],'-c','driver',
+                          '--','findmnt','-n','-o','FSTYPE,SOURCE','--target','/replicas')
+            assert mount.split()[0]=='nfs4' and self.nas_ip+':' in mount, mount
+        self.k('patch','deployment','sqlite-csi-controller','-n','sqlite-csi-system','--type=merge',
+            '-p',json.dumps({'spec':{'template':{'spec':{'nodeSelector':{
+                'kubernetes.io/hostname':self.workers[1]}}}}}))
+        self.wait('controller placed on surviving worker before faults',lambda:(p:=self.controller()) and p['spec']['nodeName']==self.workers[1])
+        self.template = copy.deepcopy(self.get('deployment','sqlite-test','-n','sqlite-test')['spec'])
+        self.template['template']['spec']['nodeSelector']['kubernetes.io/hostname']=self.workers[0]
+        self.set_volume_id()
+        self.remove_application()
+        (self.artifacts/'topology.json').write_text(json.dumps({'backend':'NFSv4.1',
+            'csiDriver':'nfs.csi.k8s.io','chartVersion':'4.13.5','chartSHA256':NFS_CHART_SHA256,
+            'kubernetesNodes':3,'separateNas':True,'workerHostDirectoryBypass':False,
+            'mountOptions':['nfsvers=4.1','hard','timeo=10','retrans=2','actimeo=0'],
+            'nasPackages':self.run('docker','exec',self.nas_id,'dpkg-query','-W','nfs-ganesha','nfs-ganesha-vfs')},indent=2))
+
+    def set_volume_id(self):
+        claim = self.get('pvc','sqlite-test','-n','sqlite-test')
+        self.pv_name = claim['spec']['volumeName']
+        self.pv_uid = self.get('pv',self.pv_name)['metadata']['uid']
+        self.volume_id = self.get('pv',self.pv_name)['spec']['csi']['volumeHandle']
+
+    def create_application(self):
+        self.apply({'apiVersion':'v1','kind':'PersistentVolumeClaim','metadata':{'name':'sqlite-test','namespace':'sqlite-test'},
+            'spec':{'storageClassName':'sqlite-csi-ha','accessModes':['ReadWriteOncePod'],
+                    'resources':{'requests':{'storage':'1Gi'}}}})
+        self.apply({'apiVersion':'apps/v1','kind':'Deployment','metadata':{'name':'sqlite-test','namespace':'sqlite-test'},
+                    'spec':copy.deepcopy(self.template)})
+        self.wait('fresh case writer Ready',self.app)
+        self.set_volume_id()
+
+    def remove_application(self):
+        self.k('scale','deployment','sqlite-test','-n','sqlite-test','--replicas=0')
+        self.wait('case writer fully unmounted',lambda:not self.pods('sqlite-test','app=sqlite-test'))
+        self.wait('case volume cleanly released',lambda:not self.volume().get('owner'))
+        self.k('delete','deployment','sqlite-test','-n','sqlite-test','--wait=true')
+        self.k('delete','pvc','sqlite-test','-n','sqlite-test','--wait=true')
+
+    def disconnect_nas(self):
+        self.nas()
+        self.run('docker','network','disconnect',self.network_id,self.nas_id)
+        self.disconnected = True
+        assert self.name not in self.nas()['NetworkSettings']['Networks']
+
+    def restore_nas(self):
+        if not self.nas_id: return
+        machine = self.nas()
+        if self.disconnected:
+            self.run('docker','network','connect','--ip',self.nas_ip,self.network_id,self.nas_id)
+            self.disconnected = False
+        if not machine['State']['Running']:
+            self.run('docker','start',self.nas_id)
+
+    def close_backend(self):
+        if self.nas_id:
+            self.nas()
+            self.run('docker','rm','--force',self.nas_id)
+            self.nas_id = None
+
+    def close(self):
+        self.restore_nas()  # Keep NFS alive until kind clients have been removed.
+        super().close()
+
+    def collect(self,error):
+        try:
+            if self.nas_id:
+                (self.artifacts/'nas.log').write_text(self.run('docker','logs','--tail','200',self.nas_id))
+        except Exception: pass
+        try:
+            for pod in self.get('pods','-n','kube-system')['items']:
+                if not any('nfsplugin' in c['image'] for c in pod['spec']['containers']): continue
+                for container in pod['spec']['containers']:
+                    try:
+                        log = self.k('logs','-n','kube-system',pod['metadata']['name'],'-c',container['name'],'--tail=200')
+                        (self.artifacts/(pod['metadata']['name']+'-'+container['name']+'.log')).write_text(log)
+                    except Exception: pass
+        except Exception: pass
+        super().collect(error)
+
+    def observe_locked(self, before, old_pod_uid, seconds=8):
+        """A bounded negative observation complements unit tests of the invariant."""
+        end = time.monotonic()+seconds
+        samples = 0
+        while time.monotonic()<end:
+            current = self.volume()
+            assert current.get('owner')==before['owner'] and current['epoch']==before['epoch']
+            ready = self.app()
+            assert not current['clean'], 'Unverified volume marked clean while NAS unavailable'
+            assert not ready or ready['metadata']['uid']==old_pod_uid, 'Unsafe replacement while NAS unavailable'
+            assert self.get('pv',self.pv_name)['metadata']['uid']==self.pv_uid
+            samples += 1
+            time.sleep(0.5)
+        assert samples>=2
+
+
+def cases(s):
+    class NasTests(unittest.TestCase):
+        def setUp(self):
+            self.case_ok = False
+            s.create_application()
+            self.original = s.app()
+            self.expected = [self._testMethodName+'-'+str(i) for i in range(3)]
+            for marker in self.expected: s.request(self.original,marker)
+            s.wait('baseline records verified through a fresh NFS replica restore',lambda:s.replica_records()==self.expected)
+
+        def tearDown(self):
+            s.restore_nas()
+            # Never reset ownership to make cleanup pass. A test failure retains diagnostics.
+            if not self.case_ok: return
+            s.remove_application()
+
+        def test_10_nas_restart_preserves_replica(self):
+            before = s.volume()
+            nas_id = s.nas()['Id']
+            s.run('docker','kill','--signal=KILL',nas_id)
+            self.assertFalse(s.nas()['State']['Running'])
+            s.restore_nas()
+            self.assertEqual(s.nas()['Id'],nas_id)
+            s.wait('NAS restart preserves published records in a fresh restore',lambda:s.replica_records()==self.expected)
+            s.request(self.original,'after-nas-restart')
+            self.expected.append('after-nas-restart')
+            s.wait('publisher resumes after NAS restart',lambda:s.replica_records()==self.expected)
+            self.assertEqual(s.volume()['owner'],before['owner'])
+            self.assertEqual(s.volume()['epoch'],before['epoch'])
+            self.case_ok = True
+
+        def test_20_nas_outage_blocks_clean_move_then_recovers(self):
+            before = s.volume()
+            s.disconnect_nas()
+            s.request(self.original,'local-write-during-nas-outage')
+            self.expected.append('local-write-during-nas-outage')
+            self.assertEqual([r[1] for r in s.request(self.original)['records']],self.expected)
+            s.k('patch','deployment','sqlite-test','-n','sqlite-test','--type=merge','-p',json.dumps({
+                'spec':{'template':{'spec':{'nodeSelector':{'kubernetes.io/hostname':s.workers[1]}}}}}))
+            agent = next(p for p in s.pods('sqlite-csi-system','app=sqlite-csi-node')
+                         if p['spec']['nodeName']==self.original['spec']['nodeName'])
+            script = "import json;print(json.dumps(json.load(open('/var/lib/sqlite-csi/"+s.volume_id+"/session.json'))['targets']))"
+            s.wait('clean unpublish attempted while NAS is disconnected',lambda:s.k('exec','-n','sqlite-csi-system',
+                agent['metadata']['name'],'-c','driver','--','python3','-c',script)=='{}')
+            s.observe_locked(before,self.original['metadata']['uid'])
+            s.restore_nas()
+            replacement = s.wait('clean handover resumes after NAS returns',lambda:(p:=s.app()) and p['spec']['nodeName']==s.workers[1] and p,300)
+            self.assertEqual([r[1] for r in s.request(replacement)['records']],self.expected)
+            s.wait('outage writes survive clean handover and fresh NFS restore',lambda:s.replica_records()==self.expected)
+            self.assertEqual(s.get('pv',s.pv_name)['metadata']['uid'],s.pv_uid)
+            self.case_ok = True
+
+        def worker_failure(self,nas_outage):
+            before = s.volume()
+            source = self.original['spec']['nodeName']
+            source_ip = s.inspect(source)['NetworkSettings']['Networks'][s.name]['IPAddress']
+            if nas_outage:
+                s.disconnect_nas()
+                s.request(self.original,'acknowledged-after-nas-disconnect')
+                self.assertIn('acknowledged-after-nas-disconnect',[r[1] for r in s.request(self.original)['records']])
+            s.fencer.deny = False
+            s.run('docker','network','disconnect',s.network_id,s.inspect(source)['Id'])
+            s.wait('worker independently fenced',lambda:not s.inspect(source)['State']['Running'])
+            if nas_outage:
+                s.wait('fenced recovery waiting for replica backend',lambda:s.volume().get('recovery',{}).get('phase')=='fenced')
+                s.observe_locked(before,self.original['metadata']['uid'])
+            s.restore_nas()
+            replacement = s.wait('replacement restores from NFS replica',lambda:(p:=s.app()) and p['spec']['nodeName']!=source and p,300)
+            records = [r[1] for r in s.request(replacement)['records']]
+            self.assertEqual(records[:len(self.expected)],self.expected)
+            self.assertTrue(all(v in self.expected+['acknowledged-after-nas-disconnect'] for v in records))
+            self.assertEqual(s.request(replacement,path='/integrity')['integrity'],['ok'])
+            self.assertGreater(s.volume()['epoch'],before['epoch'])
+            self.assertEqual(s.get('pv',s.pv_name)['metadata']['uid'],s.pv_uid)
+            self.assertTrue(s.volume()['replicaDirectory'].startswith('replica-r-'))
+            s.request(replacement,'after-combined-recovery')
+            records.append('after-combined-recovery')
+            s.wait('new writer publishes verified records after combined recovery',lambda:s.replica_records()==records)
+            if not nas_outage:
+                s.run('docker','network','connect','--ip',source_ip,s.network_id,s.inspect(source)['Id'])
+                s.run('docker','start',s.inspect(source)['Id'])
+                s.wait('returning worker Ready under quarantine',lambda:any(c['type']=='Ready' and c['status']=='True'
+                       for c in s.get('node',source)['status']['conditions']))
+                self.assertTrue(s.get('node',source)['spec']['unschedulable'])
+                s.audit_returned(source,self.original['metadata']['uid'])
+                s.k('taint','node',source,'node.kubernetes.io/out-of-service-')
+                s.k('uncordon',source)
+
+        def test_30_worker_failure_with_nas_available(self):
+            self.worker_failure(False)
+            self.case_ok = True
+
+        def test_40_worker_failure_with_nas_unavailable(self):
+            self.worker_failure(True)
+            self.case_ok = True
+    return unittest.defaultTestLoader.loadTestsFromTestCase(NasTests)
+
+
+class Result(unittest.TextTestResult):
+    def startTest(self,test):
+        self.started = time.monotonic()
+        super().startTest(test)
+
+    def stopTest(self,test):
+        super().stopTest(test)
+        self.records.append({'name':test.id(),'seconds':round(time.monotonic()-self.started,3),
+            'failure':next((reason for case,reason in self.failures+self.errors if case==test),None)})
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--image',default='sqlite-csi:e2e')
+    parser.add_argument('--nas-image',default='sqlite-csi-nas:e2e')
+    args = parser.parse_args()
+    suite = NasSuite(args.image,args.nas_image)
+    error, result = None, None
+    try:
+        suite.setup()
+        suite.verify_topology()
+        result = Result(sys.stderr,True,2)
+        result.records = []
+        # TextTestRunner supplies the stream wrapper expected by TextTestResult.
+        runner = unittest.TextTestRunner(verbosity=2,failfast=True,resultclass=lambda *args: result)
+        result.stream = runner.stream
+        runner.run(cases(suite))
+        if result.testsRun != 4 or not result.wasSuccessful(): raise AssertionError('NAS integration testcase failed or did not run')
+    except Exception as caught:
+        error = caught
+        print('FAIL '+str(caught),file=sys.stderr,flush=True)
+    finally:
+        suite.collect(error)
+        root = ET.Element('testsuite',name='nas-integration',tests=str(result.testsRun if result else 1),
+                          failures=str(len(result.failures) if result else 0),errors=str(len(result.errors) if result else 1))
+        for record in result.records if result else []:
+            case = ET.SubElement(root,'testcase',name=record['name'],time=str(record['seconds']))
+            if record['failure']: ET.SubElement(case,'failure').text=record['failure']
+        if result is None: ET.SubElement(ET.SubElement(root,'testcase',name='fixture'),'error').text=str(error)
+        ET.ElementTree(root).write(suite.artifacts/'junit.xml',encoding='utf-8',xml_declaration=True)
+        (suite.artifacts/'cases.json').write_text(json.dumps({'result':'FAIL' if error else 'PASS',
+            'tests':result.records if result else [],'backend':'real-nfs4','sourceRevision':os.environ.get('GITHUB_SHA','unknown'),
+            'error':str(error) if error else None},indent=2))
+        suite.close()
+    if error: raise SystemExit(1)
+
+
+if __name__=='__main__': main()
