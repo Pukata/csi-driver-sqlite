@@ -17,13 +17,13 @@ def describe(cm):
         reason = 'Volume is marked deleted; investigate before attempting recovery.'
     elif v.get('owner') and v.get('prepared') and not v.get('clean'):
         if policy == 'manual':
-            reason = 'Prepared unclean owner is locked under manual policy. Keep the old writer fenced and follow the manual recovery runbook.'
+            reason = 'Prepared owner is locked under manual policy; this is also normal for an active writer. Check workload and node health before diagnosing a failure. For unclean recovery, independently fence the old writer and follow the manual recovery runbook.'
         elif phase == 'fencing':
             reason = 'Recovery is at fencing; verify node identity and the independent fencing authority. Check controller logs for the failure.'
         elif phase == 'fenced':
             reason = 'Fencing was recorded; replica restore, verification, or quarantine may be blocked. Check controller logs; keep the old writer fenced.'
         else:
-            reason = 'Prepared unclean owner is locked. Check node readiness, grace period, identity mapping and controller logs; keep the old writer fenced.'
+            reason = 'Prepared owner is locked; this is also normal for an active writer. Check workload and node health, grace period, identity mapping and controller logs. Unclean takeover requires independent fencing.'
     elif v.get('owner'):
         reason = 'Owner is recorded; a move depends on normal detach and clean handover.'
     elif phase == 'released':

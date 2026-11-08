@@ -29,6 +29,13 @@ class StatusTests(unittest.TestCase):
                 self.assertIn('controller logs', state['reason'])
                 self.assertEqual(state['recovery_phase'], phase)
 
+    def test_active_owner_is_not_reported_as_a_failed_writer(self):
+        for policy in ('manual', 'latest-replica'):
+            with self.subTest(policy=policy):
+                state = status.describe(cm(recoveryPolicy=policy))
+                self.assertIn('normal for an active writer', state['reason'])
+                self.assertIn('node health', state['reason'])
+
     def test_released_requires_replacement_restore(self):
         state = status.describe(cm(owner='', recovery={'phase': 'released'}))
         self.assertIn('restore', state['reason'])
