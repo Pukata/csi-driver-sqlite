@@ -1,4 +1,4 @@
-.PHONY: fmt verify test build chart image e2e integration-test benchmark nas-image nas-test
+.PHONY: fmt verify test build chart image e2e integration-test benchmark nas-image nas-test smb-image smb-test
 
 IMAGE ?= sqlite-csi:e2e
 
@@ -36,6 +36,12 @@ nas-image:
 
 nas-test:
 	python3 test/nas/run.py --image $(IMAGE)
+
+smb-image:
+	docker build -f test/nas/Dockerfile.smb -t sqlite-csi-smb:e2e .
+
+smb-test:
+	python3 test/nas/smb.py --image $(IMAGE)
 
 benchmark:
 	mkdir -p .e2e/artifacts .e2e/bench-work

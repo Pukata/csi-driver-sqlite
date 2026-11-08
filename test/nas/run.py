@@ -1,4 +1,4 @@
-"""Real NFS integration tests; faults target only this run's Docker objects."""
+"""Real NAS integration tests; faults target only this run's Docker objects."""
 import argparse
 import copy
 import hashlib
@@ -71,7 +71,7 @@ class NasSuite(Suite):
             'spec':{'storageClassName':'test-nas','accessModes':['ReadWriteMany'],
                     'resources':{'requests':{'storage':'5Gi'}}}})
 
-    def verify_topology(self):
+    def verify_backend(self):
         claim = self.get('pvc','sqlite-csi-replicas','-n','sqlite-csi-system')
         pv = self.get('pv',claim['spec']['volumeName'])
         assert pv['spec']['csi']['driver']=='nfs.csi.k8s.io'
@@ -82,6 +82,9 @@ class NasSuite(Suite):
             mount = self.k('exec','-n','sqlite-csi-system',agent['metadata']['name'],'-c','driver',
                           '--','findmnt','-n','-o','FSTYPE,SOURCE','--target','/replicas')
             assert mount.split()[0]=='nfs4' and self.nas_ip+':' in mount, mount
+
+    def verify_topology(self):
+        self.verify_backend()
         self.k('patch','deployment','sqlite-csi-controller','-n','sqlite-csi-system','--type=merge',
             '-p',json.dumps({'spec':{'template':{'spec':{'nodeSelector':{
                 'kubernetes.io/hostname':self.workers[1]}}}}}))
@@ -90,6 +93,9 @@ class NasSuite(Suite):
         self.template['template']['spec']['nodeSelector'].pop('kubernetes.io/hostname',None)
         self.set_volume_id()
         self.remove_application()
+        self.write_topology()
+
+    def write_topology(self):
         (self.artifacts/'topology.json').write_text(json.dumps({'backend':'NFSv4.1',
             'csiDriver':'nfs.csi.k8s.io','chartVersion':'4.13.5','chartSHA256':NFS_CHART_SHA256,
             'kubernetesNodes':3,'separateNas':True,'workerHostDirectoryBypass':False,
@@ -159,7 +165,7 @@ class NasSuite(Suite):
         except Exception: pass
         try:
             for pod in self.get('pods','-n','kube-system')['items']:
-                if not any('nfsplugin' in c['image'] for c in pod['spec']['containers']): continue
+                if not any(plugin in c['image'] for c in pod['spec']['containers'] for plugin in ('nfsplugin','smbplugin')): continue
                 for container in pod['spec']['containers']:
                     try:
                         log = self.k('logs','-n','kube-system',pod['metadata']['name'],'-c',container['name'],'--tail=200')
@@ -192,7 +198,7 @@ def cases(s):
             self.original = s.app()
             self.expected = [self._testMethodName+'-'+str(i) for i in range(3)]
             for marker in self.expected: s.request(self.original,marker)
-            s.wait('baseline records verified through a fresh NFS replica restore',lambda:s.replica_records()==self.expected)
+            s.wait('baseline records verified through a fresh replica restore',lambda:s.replica_records()==self.expected)
 
         def tearDown(self):
             s.restore_nas()
@@ -232,7 +238,7 @@ def cases(s):
             s.restore_nas()
             replacement = s.wait('clean handover resumes after NAS returns',lambda:(p:=s.app()) and p['spec']['nodeName']==s.workers[1] and p,300)
             self.assertEqual([r[1] for r in s.request(replacement)['records']],self.expected)
-            s.wait('outage writes survive clean handover and fresh NFS restore',lambda:s.replica_records()==self.expected)
+            s.wait('outage writes survive clean handover and fresh replica restore',lambda:s.replica_records()==self.expected)
             self.assertEqual(s.get('pv',s.pv_name)['metadata']['uid'],s.pv_uid)
             self.case_ok = True
 
@@ -251,7 +257,7 @@ def cases(s):
                 s.wait('fenced recovery waiting for replica backend',lambda:s.volume().get('recovery',{}).get('phase')=='fenced')
                 s.observe_locked(before,self.original['metadata']['uid'])
             s.restore_nas()
-            replacement = s.wait('replacement restores from NFS replica',lambda:(p:=s.app()) and p['spec']['nodeName']!=source and p,300)
+            replacement = s.wait('replacement restores from replica',lambda:(p:=s.app()) and p['spec']['nodeName']!=source and p,300)
             records = [r[1] for r in s.request(replacement)['records']]
             self.assertEqual(records[:len(self.expected)],self.expected)
             self.assertTrue(all(v in self.expected+['acknowledged-after-nas-disconnect'] for v in records))
@@ -293,12 +299,12 @@ class Result(unittest.TextTestResult):
             'failure':next((reason for case,reason in self.failures+self.errors if case==test),None)})
 
 
-def main():
+def main(suite_class=NasSuite, backend="real-nfs4", default_nas_image="sqlite-csi-nas:e2e"):
     parser = argparse.ArgumentParser()
     parser.add_argument('--image',default='sqlite-csi:e2e')
-    parser.add_argument('--nas-image',default='sqlite-csi-nas:e2e')
+    parser.add_argument('--nas-image',default=default_nas_image)
     args = parser.parse_args()
-    suite = NasSuite(args.image,args.nas_image)
+    suite = suite_class(args.image,args.nas_image)
     error, result = None, None
     try:
         suite.setup()
@@ -323,7 +329,7 @@ def main():
         if result is None: ET.SubElement(ET.SubElement(root,'testcase',name='fixture'),'error').text=str(error)
         ET.ElementTree(root).write(suite.artifacts/'junit.xml',encoding='utf-8',xml_declaration=True)
         (suite.artifacts/'cases.json').write_text(json.dumps({'result':'FAIL' if error else 'PASS',
-            'tests':result.records if result else [],'backend':'real-nfs4','sourceRevision':os.environ.get('GITHUB_SHA','unknown'),
+            'tests':result.records if result else [],'backend':backend,'sourceRevision':os.environ.get('GITHUB_SHA','unknown'),
             'error':str(error) if error else None},indent=2))
         suite.close()
     if error: raise SystemExit(1)

@@ -12,6 +12,9 @@ Run `make integration-test` for Redfish authority changes and `make image benchm
 for resource/digest changes. Keep application migration tooling outside this project.
 Run `make image nas-image nas-test` for changes to NAS fixtures or backend recovery.
 The NAS suite creates its own NFS server and cluster; never substitute an existing NAS.
+Run `make image smb-image smb-test` for SMB fixture changes, and both NAS variants
+for changes to their shared recovery harness. The SMB suite owns its Samba server
+and cluster too; never substitute an existing share.
 
 For AI-assisted commits, retain the human author and use this repository's
 established attribution trailer exactly:

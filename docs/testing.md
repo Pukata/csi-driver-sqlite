@@ -11,7 +11,7 @@ infrastructure. The repository remains experimental even when CI is green.
 | Unit | Ownership/epoch rules, guarded state transitions, recovery refusal | Go matrix, every PR/push |
 | Component/integration | TLS fencing protocol and refusal paths, fault-target ownership guards, real SQLite/Litestream correctness/resource tests | Fast checks and one resource job |
 | Cluster end-to-end | Kubernetes scheduling, CSI mounts, real process termination, stale worker return, Gatus compatibility | Two Kubernetes versions |
-| NAS integration/end-to-end | Real NFS CSI provisioning/mounts and NAS/worker fault boundaries | One pinned Kubernetes version |
+| NAS integration/end-to-end | Real NFS and SMB CSI provisioning/mounts and NAS/worker fault boundaries | One pinned Kubernetes version |
 
 Keep policy combinations in unit tests. The expensive suites cover crossings
 between real components, with bounded waits for observable outcomes. They do
@@ -68,6 +68,7 @@ Failures must be diagnosed rather than bypassed by forcing volume ownership.
 
 ```sh
 make image nas-image nas-test
+make image smb-image smb-test
 ```
 
 This suite uses a separate userspace NFS-Ganesha container outside a three-node
@@ -76,6 +77,15 @@ kind cluster. The replica claim is dynamically provisioned by upstream
 The tests inspect actual worker mount types and sources to require NFSv4.1;
 there is no shared host-directory mount into the Kubernetes nodes in this suite.
 Only the NAS container sees the persistent export directory directly.
+
+The SMB variant runs the same four cases against a separate Samba container and
+the upstream `smb.csi.k8s.io` chart 1.19.1, with a checksum-checked archive. It
+checks the CIFS mount type and server source on both workers. The disposable
+share uses a fresh per-run password held in a private file and a Kubernetes Secret;
+the server publishes no host port. Credentials are excluded from
+the collected artifacts. SMB3, strict caching and `noserverino` are selected for the
+fixture. The Linux host must provide the CIFS kernel module; CI loads it before
+running this variant.
 
 One cluster is reused, with a new application PVC and independent baseline records
 for each of four named unittest cases. It stops after the first failed case rather
@@ -109,7 +119,7 @@ and publishes no host port. Clients use **hard** mounts with shortened retransmi
 timers and disabled attribute caching; the server retains a ten-second lease/grace
 period. These fixture settings keep CI bounded and are not recommended NAS policy.
 Actual NFS server packages are recorded with the result. The base image and chart
-archive are pinned; this does not certify a vendor NAS firmware, SMB, root-squash
+archive are pinned; this does not certify a vendor NAS firmware, SMB authentication or root-squash
 policy, physical power-loss durability, or a Kubernetes control-plane outage.
 
 ## What these tests do not establish

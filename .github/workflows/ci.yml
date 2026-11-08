@@ -66,6 +66,10 @@ jobs:
             backend: nfs
             artifact: nas-integration-1.36.4
             node-image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+          - kubernetes: '1.36.4'
+            backend: smb
+            artifact: smb-integration-1.36.4
+            node-image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with: {persist-credentials: false}
@@ -104,6 +108,13 @@ jobs:
         env:
           KIND_NODE_IMAGE: ${{ matrix.node-image }}
         run: make nas-image nas-test
+      - name: Exercise SMB integration boundaries
+        if: matrix.backend == 'smb'
+        env:
+          KIND_NODE_IMAGE: ${{ matrix.node-image }}
+        run: |
+          sudo modprobe cifs
+          make smb-image smb-test
       - name: Upload Kubernetes logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
