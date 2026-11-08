@@ -234,7 +234,6 @@ else:
             # Inject live write faults through the publisher's protocol mount.
             # Mutating the server's backing directory bypasses NFS lookup/cache
             # invalidation and can leave the client writing to the old inode.
-            assert action in ('block-write', 'repair')
             assert client['spec']['nodeName'] in self.workers
             self.k('exec', '-n', 'sqlite-csi-system', client['metadata']['name'],
                    '-c', 'driver', '--', 'python3', '-c', script, self.volume_id, action)
@@ -347,12 +346,21 @@ def cases(s):
             self.assertEqual(before.get('replicaDirectory','replica'),'replica')
             source = self.original['spec']['nodeName']
             source_ip = s.inspect(source)['NetworkSettings']['Networks'][s.name]['IPAddress']
-            s.disconnect_nas()
-            s.fencer.deny = False
+            # Keep recovery denied while simulating an abrupt worker crash and
+            # damaging its published history through the surviving NAS client.
+            # Out-of-band server mutations can leave stale NFS handles or SMB
+            # file caches, testing the fixture rather than recovery from damage.
+            s.fencer.deny = True
             s.run('docker','network','disconnect',s.network_id,s.inspect(source)['Id'])
-            s.wait('old worker independently fenced before replica damage',lambda:not s.inspect(source)['State']['Running'])
-            s.replica_fault(fault)
-            s.restore_nas()
+            s.run('docker','kill','--signal=KILL',s.inspect(source)['Id'])
+            s.wait('old writer stopped before replica damage',lambda:not s.inspect(source)['State']['Running'])
+            s.observe_locked(before,self.original['metadata']['uid'])
+            client = next(p for p in s.pods('sqlite-csi-system','app=sqlite-csi-node')
+                          if p['spec']['nodeName'] != source and s.ready(p))
+            s.replica_fault(fault, client)
+            # The authority must independently reconfirm power-off before the
+            # controller can attempt restore; stopping a worker is not a proof.
+            s.fencer.deny = False
             s.wait('recovery reaches fenced phase with damaged replica',lambda:s.volume().get('recovery',{}).get('phase')=='fenced')
             def failure_count():
                 controller = s.controller()

@@ -56,7 +56,7 @@ class FaultTargetTests(unittest.TestCase):
         fixture.workers = ['owned-worker']
         fixture.k = Mock()
         client = {'metadata': {'name': 'publisher'}, 'spec': {'nodeName': 'owned-worker'}}
-        for action in ('block-write', 'repair'):
+        for action in ('corrupt', 'incomplete', 'block-write', 'repair'):
             fixture.replica_fault(action, client)
             args = fixture.k.call_args.args
             self.assertEqual(args[:8], ('exec', '-n', 'sqlite-csi-system', 'publisher', '-c', 'driver', '--', 'python3'))
